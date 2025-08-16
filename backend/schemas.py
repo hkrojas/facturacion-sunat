@@ -162,7 +162,8 @@ class BienGuia(BaseModel):
 
 class DestinatarioGuia(BaseModel):
     tipoDoc: str
-    numDoc: str
+    # --- CORRECCIÓN: numDoc debe ser int ---
+    numDoc: int
     rznSocial: str
 
 class DireccionGuia(BaseModel):
@@ -172,15 +173,16 @@ class DireccionGuia(BaseModel):
 class ConductorGuia(BaseModel):
     tipo: str = "Principal"
     tipoDoc: str
-    numDoc: str
+    # --- CORRECCIÓN: numDoc debe ser int ---
+    numDoc: int
     nombres: str
     apellidos: str
-    # --- SOLUCIÓN: Se cambia el campo de licencia a obligatorio ---
     licencia: str
 
 class TransportistaGuia(BaseModel):
     tipoDoc: Optional[str] = None
-    numDoc: Optional[str] = None
+    # --- CORRECCIÓN: numDoc debe ser int ---
+    numDoc: Optional[int] = None
     rznSocial: Optional[str] = None
     placa: Optional[str] = None
 

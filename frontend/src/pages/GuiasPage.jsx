@@ -101,7 +101,6 @@ const GuiasPage = () => {
         destinatario: { tipoDoc: '6', numDoc: '', rznSocial: '' },
         codTraslado: '01',
         modTraslado: '02',
-        // --- SOLUCIÓN: Usar la fecha actual ---
         fecTraslado: new Date().toISOString().split('T')[0],
         pesoTotal: 1.0,
         partida: { ubigueo: '150101', direccion: user?.business_address || '' },
@@ -169,7 +168,6 @@ const GuiasPage = () => {
         const { numDoc } = formData.conductor;
         setLoadingConductor(true);
         await handleConsultarDocumento('DNI', numDoc, (data) => {
-            // La API devuelve: "NOMBRES APELLIDO_PATERNO APELLIDO_MATERNO"
             const nombreCompleto = data.nombre.split(' ');
             if (nombreCompleto.length >= 3) {
                 const apellidoMaterno = nombreCompleto.pop();
@@ -179,13 +177,11 @@ const GuiasPage = () => {
                 handleChange('conductor', 'nombres', nombres);
                 handleChange('conductor', 'apellidos', `${apellidoPaterno} ${apellidoMaterno}`);
             } else if (nombreCompleto.length === 2) {
-                // Fallback para nombres con solo 1 apellido
                 const apellidos = nombreCompleto.pop();
                 const nombres = nombreCompleto.join(' ');
                 handleChange('conductor', 'nombres', nombres);
                 handleChange('conductor', 'apellidos', apellidos);
             } else {
-                // Fallback para nombres con una sola palabra
                 handleChange('conductor', 'nombres', data.nombre);
                 handleChange('conductor', 'apellidos', '');
             }
@@ -210,11 +206,33 @@ const GuiasPage = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
+
+        const payload = JSON.parse(JSON.stringify(formData));
+        
+        // --- INICIO DE LA CORRECCIÓN FINAL ---
+        // Convertir todos los numDoc a enteros antes de enviar
+        if (payload.destinatario.numDoc) {
+            payload.destinatario.numDoc = parseInt(payload.destinatario.numDoc, 10);
+        }
+        if (payload.conductor && payload.conductor.numDoc) {
+            payload.conductor.numDoc = parseInt(payload.conductor.numDoc, 10);
+        }
+        if (payload.transportista && payload.transportista.numDoc) {
+            payload.transportista.numDoc = parseInt(payload.transportista.numDoc, 10);
+        }
+        // --- FIN DE LA CORRECCIÓN FINAL ---
+
+        if (payload.modTraslado === '01') {
+            delete payload.conductor;
+        } else if (payload.modTraslado === '02') {
+            payload.transportista = { placa: payload.transportista.placa };
+        }
+
         try {
             const response = await fetch(`${API_URL}/guias-remision/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify(formData)
+                body: JSON.stringify(payload)
             });
             const data = await response.json();
             if (!response.ok) {

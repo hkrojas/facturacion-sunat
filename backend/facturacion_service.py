@@ -14,10 +14,7 @@ class FacturacionException(Exception):
     pass
 
 def get_apisperu_token(db: Session, user: models.User) -> str:
-    """
-    Obtiene un token válido de Apis Perú para el usuario.
-    Si el token existente ha expirado o no existe, solicita uno nuevo.
-    """
+    # ... (código sin cambios)
     if user.apisperu_token and user.apisperu_token_expires:
         if datetime.now(timezone.utc) < user.apisperu_token_expires:
             return user.apisperu_token
@@ -50,9 +47,7 @@ def get_apisperu_token(db: Session, user: models.User) -> str:
         raise FacturacionException(f"Error al iniciar sesión en Apis Perú: {e}")
 
 def get_companies(token: str) -> list:
-    """
-    Obtiene la lista de empresas desde la API de Apis Perú.
-    """
+    # ... (código sin cambios)
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
         response = requests.get(f"{settings.APISPERU_URL}/companies", headers=headers)
@@ -62,6 +57,7 @@ def get_companies(token: str) -> list:
         raise FacturacionException(f"Error de conexión al obtener empresas: {e}")
 
 def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: models.User, serie: str, correlativo: str) -> dict:
+    # ... (código sin cambios)
     if not all([user.business_ruc, user.business_name, user.business_address]):
         raise FacturacionException("Datos de la empresa (RUC, Razón Social, Dirección) incompletos en el perfil.")
     if cotizacion.nro_documento == user.business_ruc:
@@ -116,6 +112,11 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
 
 def send_invoice(token: str, payload: dict) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    print("--- PAYLOAD DE FACTURA/BOLETA A ENVIAR ---")
+    print(json.dumps(payload, indent=4))
+    print("------------------------------------------")
+
     try:
         response = requests.post(f"{settings.APISPERU_URL}/invoice/send", headers=headers, json=payload)
         if response.status_code >= 400:
@@ -148,8 +149,8 @@ def get_document_file(token: str, comprobante: models.Comprobante, user: models.
         raise FacturacionException(f"Error al procesar los datos para la descarga: {e}")
 
 def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user: models.User, serie: str, correlativo: str) -> dict:
-    if not all([user.business_ruc, user.business_name, user.business_address]):
-        raise FacturacionException("Datos de la empresa (RUC, Razón Social, Dirección) incompletos en el perfil.")
+    if not all([user.business_ruc, user.business_name]):
+        raise FacturacionException("Datos de la empresa (RUC, Razón Social) incompletos en el perfil.")
 
     peru_tz = timezone(timedelta(hours=-5))
     now_in_peru = datetime.now(peru_tz)
@@ -157,17 +158,18 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
     fecha_emision_final = fecha_emision_formateada[:-2] + ':' + fecha_emision_formateada[-2:]
 
     bienes_corregidos = []
-    for bien in guia_data.bienes:
+    for i, bien in enumerate(guia_data.bienes):
         bien_dict = bien.model_dump()
         bien_dict['cantidad'] = float(bien_dict['cantidad'])
+        bien_dict['codigo'] = f"PROD-{i+1}"
         bienes_corregidos.append(bien_dict)
 
     company_data = {
-        "ruc": user.business_ruc,
+        "ruc": int(user.business_ruc),
         "razonSocial": user.business_name,
-        "nombreComercial": user.business_name,
+        "nombreComercial": user.business_name or user.business_name,
         "address": {
-            "direccion": user.business_address,
+            "direccion": user.business_address or "",
             "provincia": "LIMA",
             "departamento": "LIMA",
             "distrito": "LIMA",
@@ -175,6 +177,9 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
         }
     }
     
+    destinatario_data = guia_data.destinatario.model_dump()
+    destinatario_data['numDoc'] = str(destinatario_data['numDoc'])
+
     motivos_traslado = {
         "01": "VENTA",
         "14": "VENTA SUJETA A CONFIRMACION DEL COMPRADOR",
@@ -185,11 +190,46 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
     }
     descripcion_traslado = motivos_traslado.get(guia_data.codTraslado, "OTROS")
 
-    # --- SOLUCIÓN: Se corrige el formato de la fecha de traslado ---
-    # La API espera el formato completo ISO 8601 con zona horaria.
     fecha_traslado_dt = datetime.combine(guia_data.fecTraslado, datetime.min.time())
     fecha_traslado_final = fecha_traslado_dt.replace(tzinfo=peru_tz).strftime('%Y-%m-%dT%H:%M:%S%z')
     fecha_traslado_final = fecha_traslado_final[:-2] + ':' + fecha_traslado_final[-2:]
+    
+    envio_data = {
+        "modTraslado": guia_data.modTraslado,
+        "codTraslado": guia_data.codTraslado,
+        "desTraslado": descripcion_traslado,
+        "fecTraslado": fecha_traslado_final,
+        "pesoTotal": float(guia_data.pesoTotal),
+        "undPesoTotal": "KGM",
+        "partida": guia_data.partida.model_dump(),
+        "llegada": guia_data.llegada.model_dump()
+    }
+
+    if guia_data.modTraslado == "01": # Transporte Público
+        if guia_data.transportista:
+            transportista_data = guia_data.transportista.model_dump()
+            if transportista_data.get('numDoc'):
+                transportista_data['numDoc'] = str(transportista_data['numDoc'])
+            
+            transportista_data = {k: v for k, v in transportista_data.items() if v is not None}
+
+            if transportista_data:
+                 envio_data["transportista"] = transportista_data
+            else:
+                raise FacturacionException("Los datos del transportista son requeridos para transporte público.")
+    elif guia_data.modTraslado == "02": # Transporte Privado
+        if guia_data.conductor:
+             conductor_data = guia_data.conductor.model_dump()
+             conductor_data['numDoc'] = str(conductor_data['numDoc'])
+             envio_data["choferes"] = [conductor_data]
+        if guia_data.transportista and guia_data.transportista.placa:
+            # --- INICIO DE LA CORRECCIÓN ---
+            # Limpiar la placa de guiones y espacios
+            placa_limpia = guia_data.transportista.placa.replace("-", "").replace(" ", "")
+            envio_data["vehiculo"] = {"placa": placa_limpia}
+            # --- FIN DE LA CORRECCIÓN ---
+        else:
+            raise FacturacionException("La placa del vehículo es requerida para transporte privado.")
 
     payload = {
         "version": "2022",
@@ -198,44 +238,19 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
         "correlativo": correlativo,
         "fechaEmision": fecha_emision_final,
         "company": company_data,
-        "destinatario": guia_data.destinatario.model_dump(),
-        "envio": {
-            "modTraslado": guia_data.modTraslado,
-            "codTraslado": guia_data.codTraslado,
-            "desTraslado": descripcion_traslado,
-            "fecTraslado": fecha_traslado_final, # Se usa la fecha con formato corregido
-            "pesoTotal": float(guia_data.pesoTotal),
-            "undPesoTotal": "KGM",
-            "partida": guia_data.partida.model_dump(),
-            "llegada": guia_data.llegada.model_dump()
-        },
+        "destinatario": destinatario_data,
+        "envio": envio_data,
         "details": bienes_corregidos
     }
-
-    if guia_data.modTraslado == "01": # Transporte Público
-        if guia_data.transportista:
-            transportista_data = {k: v for k, v in guia_data.transportista.model_dump().items() if v}
-            if transportista_data:
-                 payload["envio"]["transportista"] = transportista_data
-            else:
-                raise FacturacionException("Los datos del transportista son requeridos para transporte público.")
-    elif guia_data.modTraslado == "02": # Transporte Privado
-        if guia_data.conductor:
-             payload["envio"]["choferes"] = [guia_data.conductor.model_dump()]
-        if guia_data.transportista and guia_data.transportista.placa:
-            payload["envio"]["vehiculo"] = {"placa": guia_data.transportista.placa}
-        else:
-            raise FacturacionException("La placa del vehículo es requerida para transporte privado.")
-    
-    # --- SOLUCIÓN: Se añade un print para depurar el payload final ---
-    print("--- PAYLOAD DE GUÍA DE REMISIÓN A ENVIAR ---")
-    print(json.dumps(payload, indent=4))
-    print("-----------------------------------------")
-
     return payload
 
 def send_guia_remision(token: str, payload: dict) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    print("--- PAYLOAD DE GUÍA DE REMISIÓN A ENVIAR ---")
+    print(json.dumps(payload, indent=4))
+    print("------------------------------------------")
+    
     try:
         response = requests.post(f"{settings.APISPERU_URL}/despatch/send", headers=headers, json=payload)
         
