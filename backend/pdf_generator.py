@@ -92,7 +92,6 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         total_gravado = monto_total - total_igv
         ruc_para_cuadro = user.business_ruc or ''
 
-    # ... (El resto del código para encabezado, cliente, productos, etc. no cambia)
     logo = ""
     if user.logo_filename and os.path.exists(f"logos/{user.logo_filename}"):
         try: logo = Image(f"logos/{user.logo_filename}", width=151, height=76)
@@ -155,8 +154,8 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     if is_comprobante:
         if document_data.sunat_hash:
             # --- INICIO DE LA CORRECCIÓN ---
-            # Formato del QR según la especificación de SUNAT
-            qr_string = "|".join([
+            # Se construye la base del string del QR
+            qr_data = [
                 str(company.get('ruc', '')),
                 str(payload.get('tipoDoc', '')),
                 str(payload.get('serie', '')),
@@ -166,7 +165,13 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
                 datetime.fromisoformat(payload.get('fechaEmision')).strftime("%Y-%m-%d"),
                 str(client.get('tipoDoc', '')),
                 str(client.get('numDoc', ''))
-            ])
+            ]
+            
+            # El HASH solo se añade si el comprobante es una FACTURA (tipo '01')
+            if payload.get('tipoDoc') == '01':
+                qr_data.append(str(document_data.sunat_hash or ''))
+
+            qr_string = "|".join(qr_data)
             # --- FIN DE LA CORRECCIÓN ---
 
             qr_img = qrcode.make(qr_string, box_size=4, border=1)

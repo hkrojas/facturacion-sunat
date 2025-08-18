@@ -153,39 +153,30 @@ class DocumentoConsulta(BaseModel):
     tipo_documento: str
     numero_documento: str
 
-# --- ESQUEMAS PARA GUÍA DE REMISIÓN (ACTUALIZADOS) ---
-
+# --- Esquemas para Guía de Remisión (corregidos) ---
 class BienGuia(BaseModel):
     descripcion: str
     cantidad: float
     unidad: str
-
 class DestinatarioGuia(BaseModel):
     tipoDoc: str
-    # --- CORRECCIÓN: numDoc debe ser int ---
-    numDoc: int
+    numDoc: str
     rznSocial: str
-
 class DireccionGuia(BaseModel):
     ubigueo: str
     direccion: str
-
 class ConductorGuia(BaseModel):
     tipo: str = "Principal"
     tipoDoc: str
-    # --- CORRECCIÓN: numDoc debe ser int ---
-    numDoc: int
+    numDoc: str
     nombres: str
     apellidos: str
     licencia: str
-
 class TransportistaGuia(BaseModel):
     tipoDoc: Optional[str] = None
-    # --- CORRECCIÓN: numDoc debe ser int ---
-    numDoc: Optional[int] = None
+    numDoc: Optional[str] = None
     rznSocial: Optional[str] = None
     placa: Optional[str] = None
-
 class GuiaRemisionCreateAPI(BaseModel):
     destinatario: DestinatarioGuia
     codTraslado: str
@@ -197,13 +188,11 @@ class GuiaRemisionCreateAPI(BaseModel):
     transportista: Optional[TransportistaGuia] = None
     conductor: Optional[ConductorGuia] = None
     bienes: List[BienGuia]
-
 class GuiaRemisionDB(BaseModel):
     success: bool
     sunat_response: Optional[dict] = None
     sunat_hash: Optional[str] = None
     payload_enviado: Optional[dict] = None
-
 class GuiaRemision(GuiaRemisionDB):
     id: int
     owner_id: int
@@ -213,3 +202,21 @@ class GuiaRemision(GuiaRemisionDB):
     fecha_emision: datetime
     fecha_creacion: datetime
     model_config = ConfigDict(from_attributes=True)
+
+# --- NUEVOS ESQUEMAS PARA FACTURACIÓN ---
+class FacturarRequest(BaseModel):
+    tipo_comprobante: str # Aceptará 'factura' o 'boleta'
+
+class ProductoFacturaCreate(BaseModel):
+    descripcion: str
+    unidades: int
+    precio_unitario: float
+
+class FacturaCreateDirect(BaseModel):
+    tipo_comprobante: str  # "01" para factura, "03" para boleta
+    nombre_cliente: str
+    direccion_cliente: str
+    tipo_documento_cliente: str # DNI o RUC
+    nro_documento_cliente: str
+    moneda: str # SOLES o DOLARES
+    productos: List[ProductoFacturaCreate]

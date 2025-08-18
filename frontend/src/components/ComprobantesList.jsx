@@ -27,7 +27,6 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token }) => {
 
             if (!response.ok) {
                 const errData = await response.json();
-                // SOLUCIÓN: Se usa el `detail` del error para un mensaje más claro.
                 throw new Error(errData.detail || `Error al descargar ${docType.toUpperCase()}`);
             }
 
@@ -52,46 +51,66 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token }) => {
     const sunatResponse = comprobante.sunat_response;
     const cdrResponse = sunatResponse?.cdrResponse;
 
+    const DetailItem = ({ label, value, children }) => (
+        <div>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</p>
+            <p className="mt-1 text-md text-gray-900 dark:text-gray-100">{value || children}</p>
+        </div>
+    );
+    
     return (
         <div 
-            className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+            className="fixed inset-0 bg-black bg-opacity-70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
             onClick={onClose}
         >
             <div 
-                className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-2xl transform transition-all animate-slide-in-up"
+                className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-lg transform transition-all animate-slide-in-up"
                 onClick={(e) => e.stopPropagation()}
             >
-                <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-4 border-b pb-2">
-                    Detalles del Comprobante {comprobante.serie}-{comprobante.correlativo}
-                </h2>
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
+                        Detalles del Comprobante
+                    </h2>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                </div>
+                <p className="text-lg text-blue-600 dark:text-blue-400 font-semibold mb-6 border-b dark:border-gray-700 pb-4">{comprobante.serie}-{comprobante.correlativo}</p>
+                
                 {sunatResponse ? (
-                    <div className="space-y-4">
+                    <div className="space-y-6">
                         <div>
-                            <h3 className="font-semibold text-gray-700 dark:text-gray-300">Respuesta SUNAT:</h3>
-                            <div className="mt-2 p-3 bg-gray-100 dark:bg-gray-700 rounded-md text-sm">
-                                <p><strong>Éxito:</strong> {comprobante.success ? 'Sí' : 'No'}</p>
-                                {cdrResponse && (
-                                    <>
-                                        <p><strong>Código CDR:</strong> {cdrResponse.id}</p>
-                                        <p><strong>Descripción:</strong> {cdrResponse.description}</p>
-                                        {cdrResponse.notes && <p><strong>Notas:</strong> {cdrResponse.notes.join(', ')}</p>}
-                                    </>
-                                )}
-                                {sunatResponse.error && <p className="text-red-500"><strong>Error:</strong> {sunatResponse.error.message}</p>}
+                            <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">Respuesta de SUNAT</h3>
+                            <div className="space-y-4 rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4">
+                                <DetailItem label="Estado">
+                                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${comprobante.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
+                                        <svg className={`-ml-0.5 mr-1.5 h-4 w-4 ${comprobante.success ? 'text-green-500' : 'text-red-500'}`} fill="currentColor" viewBox="0 0 8 8">
+                                            <circle cx="4" cy="4" r="3" />
+                                        </svg>
+                                        {comprobante.success ? 'Aceptado' : 'Rechazado'}
+                                    </span>
+                                </DetailItem>
+                                {cdrResponse && <DetailItem label="Código CDR" value={cdrResponse.id} />}
+                                {cdrResponse && <DetailItem label="Descripción SUNAT" value={cdrResponse.description} />}
+                                {cdrResponse?.notes?.length > 0 && <DetailItem label="Notas Adicionales" value={cdrResponse.notes.join(', ')} />}
+                                {sunatResponse.error && <DetailItem label="Mensaje de Error" value={sunatResponse.error.message} />}
                             </div>
                         </div>
+
                         <div>
-                            <h3 className="font-semibold text-gray-700 dark:text-gray-300">Descargas:</h3>
-                            <div className="mt-2 flex space-x-3">
+                            <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">Descargas Disponibles</h3>
+                            <div className="flex space-x-3">
                                 <Button onClick={() => downloadFile('pdf')} loading={downloading === 'pdf'} variant="secondary">PDF Personalizado</Button>
+                                <Button onClick={() => downloadFile('xml')} loading={downloading === 'xml'} variant="secondary">XML</Button>
                                 {cdrResponse && <Button onClick={() => downloadFile('cdr')} loading={downloading === 'cdr'} variant="secondary">CDR (ZIP)</Button>}
                             </div>
                         </div>
                     </div>
                 ) : (
-                    <p>No hay detalles de SUNAT disponibles.</p>
+                    <p className="text-gray-500 dark:text-gray-400 py-8 text-center">No hay detalles de SUNAT disponibles para este comprobante.</p>
                 )}
-                <div className="mt-6 text-right">
+
+                <div className="mt-8 pt-4 border-t dark:border-gray-700 text-right">
                     <Button onClick={onClose}>Cerrar</Button>
                 </div>
             </div>
@@ -106,6 +125,8 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const { token } = useContext(AuthContext);
     const [viewingComprobante, setViewingComprobante] = useState(null);
+    
+    const EyeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.73 6.957 5.475 4.5 10 4.5s8.27 2.457 9.542 5.5c-1.272 3.043-5.068 5.5-9.542 5.5S1.73 13.043.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>;
 
     useEffect(() => {
         const fetchComprobantes = async () => {
@@ -160,31 +181,40 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
                     </div>
                 ) : (
                     <div className="overflow-x-auto rounded-lg shadow-md border dark:border-gray-700">
-                        <table className="min-w-full bg-white dark:bg-gray-800">
+                        <table className="min-w-full bg-white dark:bg-gray-800 table-fixed">
                             <thead className="bg-gray-100 dark:bg-gray-700/50">
                                 <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-bold uppercase">Documento</th>
-                                    <th className="px-6 py-3 text-left text-xs font-bold uppercase">Cliente</th>
-                                    <th className="px-6 py-3 text-left text-xs font-bold uppercase">Fecha</th>
-                                    <th className="px-6 py-3 text-left text-xs font-bold uppercase">Total</th>
-                                    <th className="px-6 py-3 text-center text-xs font-bold uppercase">Estado SUNAT</th>
-                                    <th className="px-6 py-3 text-center text-xs font-bold uppercase">Acciones</th>
+                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Documento</th>
+                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-4/12">Cliente</th>
+                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Fecha</th>
+                                    <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Total</th>
+                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-1/12">Estado</th>
+                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Acciones</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-700 text-gray-900 dark:text-gray-100">
                                 {filteredComprobantes.map((c) => (
-                                    <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                                    <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 even:bg-gray-50 dark:even:bg-gray-800/50">
                                         <td className="px-6 py-4 whitespace-nowrap">{c.serie}-{c.correlativo}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap">{c.payload_enviado.client.rznSocial}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap">{formatDate(c.fecha_emision)}</td>
+                                        <td className="px-6 py-4 truncate-cell" title={c.payload_enviado.client.rznSocial}>
+                                            {c.payload_enviado.client.rznSocial}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(c.fecha_emision)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap font-semibold">{getCurrencySymbol(c.payload_enviado.tipoMoneda)} {c.payload_enviado.mtoImpVenta.toFixed(2)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-center">
-                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${c.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${c.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
                                                 {c.success ? 'Aceptado' : 'Rechazado'}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-center">
-                                            <Button onClick={() => setViewingComprobante(c)} variant="secondary" className="text-sm">Ver Detalles</Button>
+                                            <Button 
+                                                onClick={() => setViewingComprobante(c)} 
+                                                variant="ghost" 
+                                                className="text-sm"
+                                                icon={<EyeIcon />}
+                                            >
+                                                Detalles
+                                            </Button>
                                         </td>
                                     </tr>
                                 ))}

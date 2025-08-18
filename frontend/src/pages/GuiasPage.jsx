@@ -209,18 +209,7 @@ const GuiasPage = () => {
 
         const payload = JSON.parse(JSON.stringify(formData));
         
-        // --- INICIO DE LA CORRECCIÓN FINAL ---
-        // Convertir todos los numDoc a enteros antes de enviar
-        if (payload.destinatario.numDoc) {
-            payload.destinatario.numDoc = parseInt(payload.destinatario.numDoc, 10);
-        }
-        if (payload.conductor && payload.conductor.numDoc) {
-            payload.conductor.numDoc = parseInt(payload.conductor.numDoc, 10);
-        }
-        if (payload.transportista && payload.transportista.numDoc) {
-            payload.transportista.numDoc = parseInt(payload.transportista.numDoc, 10);
-        }
-        // --- FIN DE LA CORRECCIÓN FINAL ---
+        // --- CORRECCIÓN: Se elimina la conversión a entero ---
 
         if (payload.modTraslado === '01') {
             delete payload.conductor;

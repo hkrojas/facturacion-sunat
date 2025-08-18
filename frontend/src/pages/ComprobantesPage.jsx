@@ -1,25 +1,40 @@
 // frontend/src/pages/ComprobantesPage.jsx
 import React, { useState, useEffect } from 'react';
-import { Link, useLocation } from 'react-router-dom'; // Importar useLocation
+import { Link, useLocation, useNavigate } from 'react-router-dom'; // Importar useNavigate
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import ComprobantesList from '../components/ComprobantesList';
+import CrearComprobanteForm from '../components/CrearComprobanteForm'; // Importar el nuevo formulario
 
 const ComprobantesPage = () => {
-    // --- LÓGICA PARA LEER LA PESTAÑA DESDE LA URL ---
     const location = useLocation();
+    const navigate = useNavigate(); // Hook para navegar
+
     const getTabFromQuery = () => {
         const params = new URLSearchParams(location.search);
-        return params.get('tab') || 'facturas'; // 'facturas' por defecto
+        return params.get('tab') || 'facturas';
     };
 
     const [activeTab, setActiveTab] = useState(getTabFromQuery);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
     
-    // Efecto para sincronizar el estado de la pestaña si la URL cambia
     useEffect(() => {
-        setActiveTab(getTabFromQuery());
+        const newTab = getTabFromQuery();
+        setActiveTab(newTab);
     }, [location.search]);
+
+    const handleTabClick = (tab) => {
+        setActiveTab(tab);
+        // Actualizar la URL sin recargar la página
+        navigate(`/comprobantes?tab=${tab}`);
+    };
+
+    const handleComprobanteCreado = () => {
+        // Activa el trigger para refrescar la lista
+        setRefreshTrigger(prev => prev + 1);
+        // Cambia a la pestaña de facturas para ver el nuevo comprobante
+        handleTabClick('facturas');
+    };
 
     const tabStyle = "px-6 py-3 font-semibold text-base border-b-2 transition-colors duration-300 focus:outline-none";
     const activeTabStyle = "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400";
@@ -42,16 +57,16 @@ const ComprobantesPage = () => {
             <main className="p-4 sm:p-8">
                 <div className="w-full max-w-6xl mx-auto">
                     <div className="flex border-b border-gray-300 dark:border-gray-700">
-                        <button onClick={() => setActiveTab('facturas')} className={`${tabStyle} ${activeTab === 'facturas' ? activeTabStyle : inactiveTabStyle}`}>
+                        <button onClick={() => handleTabClick('facturas')} className={`${tabStyle} ${activeTab === 'facturas' ? activeTabStyle : inactiveTabStyle}`}>
                             Facturas
                         </button>
-                        <button onClick={() => setActiveTab('boletas')} className={`${tabStyle} ${activeTab === 'boletas' ? activeTabStyle : inactiveTabStyle}`}>
+                        <button onClick={() => handleTabClick('boletas')} className={`${tabStyle} ${activeTab === 'boletas' ? activeTabStyle : inactiveTabStyle}`}>
                             Boletas
                         </button>
-                        <button onClick={() => setActiveTab('notas')} className={`${tabStyle} ${activeTab === 'notas' ? activeTabStyle : inactiveTabStyle}`}>
+                        <button onClick={() => handleTabClick('notas')} className={`${tabStyle} ${activeTab === 'notas' ? activeTabStyle : inactiveTabStyle}`}>
                             Notas de Crédito
                         </button>
-                         <button onClick={() => setActiveTab('crear')} className={`${tabStyle} ${activeTab === 'crear' ? activeTabStyle : inactiveTabStyle}`}>
+                         <button onClick={() => handleTabClick('crear')} className={`${tabStyle} ${activeTab === 'crear' ? activeTabStyle : inactiveTabStyle}`}>
                             Crear Comprobante
                         </button>
                     </div>
@@ -59,7 +74,7 @@ const ComprobantesPage = () => {
                         {activeTab === 'facturas' && <ComprobantesList tipoDoc="01" refreshTrigger={refreshTrigger} />}
                         {activeTab === 'boletas' && <ComprobantesList tipoDoc="03" refreshTrigger={refreshTrigger} />}
                         {activeTab === 'notas' && <div className="text-center py-12 text-gray-500"><p>La gestión de Notas de Crédito estará disponible próximamente.</p></div>}
-                        {activeTab === 'crear' && <div className="text-center py-12 text-gray-500"><p>El formulario para crear comprobantes directamente estará disponible próximamente.</p></div>}
+                        {activeTab === 'crear' && <CrearComprobanteForm onComprobanteCreado={handleComprobanteCreado} />}
                     </Card>
                 </div>
             </main>

@@ -16,8 +16,6 @@ from sqlalchemy import func
 import crud, models, schemas, security, facturacion_service
 from database import SessionLocal, engine
 from config import settings
-# La siguiente línea asume que tendrás un pdf_generator para guías también
-# import pdf_generator 
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -164,21 +162,40 @@ def read_comprobantes(tipo_doc: Optional[str] = None, db: Session = Depends(get_
     return crud.get_comprobantes_by_owner(db=db, owner_id=current_user.id, tipo_doc=tipo_doc)
 
 @app.post("/cotizaciones/{cotizacion_id}/facturar", response_model=schemas.Comprobante)
-def facturar_cotizacion(cotizacion_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def facturar_cotizacion(cotizacion_id: int, request_data: schemas.FacturarRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     cotizacion = crud.get_cotizacion_by_id(db, cotizacion_id=cotizacion_id, owner_id=current_user.id)
     if not cotizacion:
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
     if cotizacion.comprobante:
         raise HTTPException(status_code=400, detail="Esta cotización ya ha sido facturada.")
 
+    tipo_comprobante_str = request_data.tipo_comprobante.lower()
+
+    if tipo_comprobante_str == "factura" and cotizacion.tipo_documento != "RUC":
+        raise HTTPException(status_code=400, detail="Solo se pueden emitir facturas a clientes con RUC.")
+    
+    if tipo_comprobante_str not in ["factura", "boleta"]:
+        raise HTTPException(status_code=400, detail="Tipo de comprobante no válido. Use 'factura' o 'boleta'.")
+
     try:
         token = facturacion_service.get_apisperu_token(db, current_user)
         
-        tipo_doc = "01" if cotizacion.tipo_documento == "RUC" else "03"
-        serie = "F001" if tipo_doc == "01" else "B001"
+        if tipo_comprobante_str == "factura":
+            tipo_doc = "01"
+            serie = "F001"
+        else: # boleta
+            tipo_doc = "03"
+            serie = "B001"
+        
         correlativo = crud.get_next_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc)
 
-        invoice_payload = facturacion_service.convert_cotizacion_to_invoice_payload(cotizacion, current_user, serie, correlativo)
+        invoice_payload = facturacion_service.convert_cotizacion_to_invoice_payload(
+            cotizacion=cotizacion, 
+            user=current_user, 
+            serie=serie, 
+            correlativo=correlativo,
+            tipo_doc_comprobante=tipo_doc
+        )
         api_response = facturacion_service.send_invoice(token, invoice_payload)
         
         sunat_response_data = api_response.get('sunatResponse', {})
@@ -194,6 +211,50 @@ def facturar_cotizacion(cotizacion_id: int, db: Session = Depends(get_db), curre
         )
         
         nuevo_comprobante = crud.create_comprobante(db, comprobante=comprobante_data, cotizacion_id=cotizacion.id, owner_id=current_user.id)
+        
+        return nuevo_comprobante
+
+    except facturacion_service.FacturacionException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
+
+# --- ENDPOINT NUEVO ---
+@app.post("/comprobantes/directo", response_model=schemas.Comprobante)
+def crear_comprobante_directo(factura_data: schemas.FacturaCreateDirect, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    tipo_doc = factura_data.tipo_comprobante
+    if tipo_doc == "01" and factura_data.tipo_documento_cliente != "RUC":
+        raise HTTPException(status_code=400, detail="Solo se pueden emitir facturas a clientes con RUC.")
+
+    try:
+        token = facturacion_service.get_apisperu_token(db, current_user)
+        serie = "F001" if tipo_doc == "01" else "B001"
+        correlativo = crud.get_next_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc)
+
+        # Usaremos una nueva función de servicio para convertir estos datos
+        invoice_payload = facturacion_service.convert_direct_invoice_to_payload(
+            factura_data=factura_data,
+            user=current_user,
+            serie=serie,
+            correlativo=correlativo
+        )
+
+        api_response = facturacion_service.send_invoice(token, invoice_payload)
+
+        sunat_response_data = api_response.get('sunatResponse', {})
+        comprobante_data = schemas.ComprobanteCreate(
+            tipo_doc=invoice_payload['tipoDoc'],
+            serie=invoice_payload['serie'],
+            correlativo=invoice_payload['correlativo'],
+            fecha_emision=datetime.fromisoformat(invoice_payload['fechaEmision']),
+            success=api_response.get('sunatResponse', {}).get('success', False),
+            sunat_response=sunat_response_data,
+            sunat_hash=api_response.get('hash'),
+            payload_enviado=invoice_payload
+        )
+
+        # Creamos el comprobante sin cotizacion_id
+        nuevo_comprobante = crud.create_comprobante(db, comprobante=comprobante_data, owner_id=current_user.id)
         
         return nuevo_comprobante
 
@@ -230,7 +291,19 @@ def get_invoice_pdf(request: DocumentRequest, db: Session = Depends(get_db), cur
 
 @app.post("/facturacion/xml")
 def get_invoice_xml(request: DocumentRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    raise HTTPException(status_code=501, detail="Descarga de XML no implementada.")
+    try:
+        comprobante = crud.get_comprobante_by_id(db, comprobante_id=request.comprobante_id, owner_id=current_user.id)
+        if not comprobante:
+            raise HTTPException(status_code=404, detail="Comprobante no encontrado")
+        
+        token = facturacion_service.get_apisperu_token(db, current_user)
+        xml_content = facturacion_service.get_document_xml(token, comprobante)
+        
+        return Response(content=xml_content, media_type="application/xml")
+    except facturacion_service.FacturacionException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener el XML: {e}")
 
 @app.post("/facturacion/cdr")
 def get_invoice_cdr(request: DocumentRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -248,29 +321,15 @@ def get_invoice_cdr(request: DocumentRequest, db: Session = Depends(get_db), cur
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener el CDR: {e}")
 
-# --- NUEVOS ENDPOINTS PARA GUÍAS DE REMISIÓN ---
-
+# --- Endpoints para Guías de Remisión ---
 @app.post("/guias-remision/", response_model=schemas.GuiaRemision)
 def create_new_guia_remision(guia_data: schemas.GuiaRemisionCreateAPI, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """
-    Endpoint para crear una nueva Guía de Remisión.
-    """
     try:
-        # 1. Obtener token de Apis Perú
         token = facturacion_service.get_apisperu_token(db, current_user)
-        
-        # 2. Determinar serie y correlativo
-        # La serie para guías de remisión usualmente empieza con 'T'
         serie = "T001" 
         correlativo = crud.get_next_guia_correlativo(db, owner_id=current_user.id, serie=serie)
-
-        # 3. Convertir datos al payload de la API
         guia_payload = facturacion_service.convert_data_to_guia_payload(guia_data, current_user, serie, correlativo)
-        
-        # 4. Enviar a la API de Apis Perú
         api_response = facturacion_service.send_guia_remision(token, guia_payload)
-        
-        # 5. Preparar datos para guardar en la BD
         sunat_response_data = api_response.get('sunatResponse', {})
         guia_db_data = schemas.GuiaRemisionDB(
             success=api_response.get('sunatResponse', {}).get('success', False),
@@ -278,8 +337,6 @@ def create_new_guia_remision(guia_data: schemas.GuiaRemisionCreateAPI, db: Sessi
             sunat_hash=api_response.get('hash'),
             payload_enviado=guia_payload
         )
-        
-        # 6. Guardar en la base de datos
         nueva_guia = crud.create_guia_remision(
             db=db, 
             guia_data=guia_db_data, 
@@ -288,25 +345,17 @@ def create_new_guia_remision(guia_data: schemas.GuiaRemisionCreateAPI, db: Sessi
             correlativo=correlativo,
             fecha_emision=datetime.fromisoformat(guia_payload['fechaEmision'])
         )
-        
         return nueva_guia
-
     except facturacion_service.FacturacionException as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
-        # Captura de errores inesperados para un mejor diagnóstico
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Ocurrió un error inesperado en el servidor: {e}")
 
-
 @app.get("/guias-remision/", response_model=List[schemas.GuiaRemision])
 def read_guias_remision(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """
-    Endpoint para obtener la lista de Guías de Remisión del usuario actual.
-    """
     return crud.get_guias_remision_by_owner(db=db, owner_id=current_user.id)
-
 
 # --- Endpoints de Administrador (sin cambios) ---
 @app.get("/admin/stats/", response_model=schemas.AdminDashboardStats)
