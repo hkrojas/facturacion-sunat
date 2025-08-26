@@ -1,6 +1,4 @@
 // src/components/AdminLayout.jsx
-// COMPONENTE ACTUALIZADO: Ahora es completamente adaptable a dispositivos móviles.
-
 import React, { useState } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import ThemeToggle from './ThemeToggle';

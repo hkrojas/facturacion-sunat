@@ -1,6 +1,4 @@
 // src/pages/AdminUsersPage.jsx
-// PÁGINA COMPLETA Y ADAPTABLE: Se expande todo el código funcional.
-
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { ToastContext } from '../context/ToastContext';

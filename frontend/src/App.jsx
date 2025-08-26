@@ -12,7 +12,9 @@ import AdminProtectedRoute from './components/AdminProtectedRoute';
 import AdminPage from './pages/AdminPage';
 import ComprobantesPage from './pages/ComprobantesPage';
 import CotizacionesPage from './pages/CotizacionesPage';
-import GuiasPage from './pages/GuiasPage'; // <-- 1. IMPORTAR LA NUEVA PÁGINA
+import GuiasPage from './pages/GuiasPage';
+// --- 1. IMPORTAR LA NUEVA PÁGINA ---
+import ResumenesBajasPage from './pages/ResumenesBajasPage'; 
 
 function App() {
   const { loading } = useContext(AuthContext);
@@ -50,12 +52,20 @@ function App() {
           </ProtectedRoute>
         } 
       />
-      {/* --- 2. AÑADIR LA NUEVA RUTA PARA GUÍAS --- */}
       <Route 
         path="/guias" 
         element={
           <ProtectedRoute>
             <GuiasPage />
+          </ProtectedRoute>
+        } 
+      />
+       {/* --- 2. AÑADIR LA NUEVA RUTA --- */}
+      <Route 
+        path="/resumenes-bajas" 
+        element={
+          <ProtectedRoute>
+            <ResumenesBajasPage />
           </ProtectedRoute>
         } 
       />

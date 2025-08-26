@@ -4,7 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, EmailStr
 from typing import List, Optional, Any
 from datetime import datetime, date
 
-# --- Esquemas de Producto (sin cambios) ---
+# --- Esquemas de Producto ---
 class ProductoBase(BaseModel):
     descripcion: str = Field(..., min_length=1)
     unidades: int = Field(..., gt=0)
@@ -16,7 +16,32 @@ class Producto(ProductoBase):
     cotizacion_id: int
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Comprobante (sin cambios) ---
+# --- Esquemas para Notas de Crédito/Débito ---
+class NotaDB(BaseModel):
+    success: bool
+    sunat_response: Optional[dict] = None
+    sunat_hash: Optional[str] = None
+    payload_enviado: Optional[dict] = None
+
+class Nota(NotaDB):
+    id: int
+    owner_id: int
+    comprobante_afectado_id: int
+    tipo_doc: str
+    serie: str
+    correlativo: str
+    fecha_emision: datetime
+    cod_motivo: str
+    fecha_creacion: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class NotaCreateAPI(BaseModel):
+    comprobante_afectado_id: int
+    tipo_nota: str
+    cod_motivo: str
+    descripcion_motivo: str
+
+# --- Esquemas de Comprobante (Actualizado) ---
 class ComprobanteBase(BaseModel):
     success: bool
     sunat_response: Optional[dict] = None
@@ -36,9 +61,10 @@ class Comprobante(ComprobanteBase):
     correlativo: str
     fecha_emision: datetime
     fecha_creacion: datetime
+    notas_afectadas: List[Nota] = []
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Cotización (sin cambios) ---
+# --- Esquemas de Cotización ---
 class CotizacionBase(BaseModel):
     nombre_cliente: str = Field(..., min_length=1)
     direccion_cliente: str
@@ -64,7 +90,7 @@ class Cotizacion(CotizacionBase):
     comprobante: Optional[Comprobante] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Perfil y Usuario (sin cambios) ---
+# --- Esquemas de Perfil y Usuario ---
 class BankAccount(BaseModel):
     banco: str
     tipo_cuenta: Optional[str] = None
@@ -107,7 +133,7 @@ class User(UserBase):
     apisperu_user: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Admin (sin cambios) ---
+# --- Esquemas de Admin ---
 class AdminDashboardStats(BaseModel):
     total_users: int
     active_users: int
@@ -143,7 +169,7 @@ class AdminUserDetailView(UserBase):
     bank_accounts: Optional[List[BankAccount]] = None
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Token y DocumentoConsulta (sin cambios) ---
+# --- Esquemas de Token y DocumentoConsulta ---
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -153,7 +179,7 @@ class DocumentoConsulta(BaseModel):
     tipo_documento: str
     numero_documento: str
 
-# --- Esquemas para Guía de Remisión (corregidos) ---
+# --- Esquemas para Guía de Remisión ---
 class BienGuia(BaseModel):
     descripcion: str
     cantidad: float
@@ -203,20 +229,54 @@ class GuiaRemision(GuiaRemisionDB):
     fecha_creacion: datetime
     model_config = ConfigDict(from_attributes=True)
 
-# --- NUEVOS ESQUEMAS PARA FACTURACIÓN ---
+# --- Esquemas para Facturación ---
 class FacturarRequest(BaseModel):
-    tipo_comprobante: str # Aceptará 'factura' o 'boleta'
-
+    tipo_comprobante: str
 class ProductoFacturaCreate(BaseModel):
     descripcion: str
     unidades: int
     precio_unitario: float
-
 class FacturaCreateDirect(BaseModel):
-    tipo_comprobante: str  # "01" para factura, "03" para boleta
+    tipo_comprobante: str
     nombre_cliente: str
     direccion_cliente: str
-    tipo_documento_cliente: str # DNI o RUC
+    tipo_documento_cliente: str
     nro_documento_cliente: str
-    moneda: str # SOLES o DOLARES
+    moneda: str
     productos: List[ProductoFacturaCreate]
+
+# --- NUEVOS ESQUEMAS PARA RESÚMENES Y BAJAS ---
+class ResumenDiarioDB(BaseModel):
+    ticket: Optional[str] = None
+    success: bool
+    sunat_response: Optional[dict] = None
+    payload_enviado: Optional[dict] = None
+
+class ResumenDiario(ResumenDiarioDB):
+    id: int
+    owner_id: int
+    fecha_resumen: datetime
+    correlativo: str
+    fecha_creacion: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class ComunicacionBajaDB(BaseModel):
+    ticket: Optional[str] = None
+    success: bool
+    sunat_response: Optional[dict] = None
+    payload_enviado: Optional[dict] = None
+
+class ComunicacionBaja(ComunicacionBajaDB):
+    id: int
+    owner_id: int
+    fecha_comunicacion: datetime
+    correlativo: str
+    fecha_creacion: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class BajaItem(BaseModel):
+    comprobante_id: int
+    motivo: str
+
+class ComunicacionBajaCreateAPI(BaseModel):
+    items_a_dar_de_baja: List[BajaItem]

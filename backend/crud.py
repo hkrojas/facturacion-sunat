@@ -1,9 +1,9 @@
 # backend/crud.py
 
 from sqlalchemy.orm import Session, noload, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 from datetime import datetime, timedelta
-import models, schemas, security  # <-- LÍNEA CORREGIDA: Se añadió 'import security'
+import models, schemas, security
 from typing import Optional
 
 # --- Funciones de Usuario ---
@@ -76,7 +76,7 @@ def create_comprobante(db: Session, comprobante: schemas.ComprobanteCreate, owne
     return db_comprobante
 
 def get_comprobantes_by_owner(db: Session, owner_id: int, tipo_doc: Optional[str] = None):
-    query = db.query(models.Comprobante).filter(models.Comprobante.owner_id == owner_id)
+    query = db.query(models.Comprobante).options(joinedload(models.Comprobante.notas_afectadas)).filter(models.Comprobante.owner_id == owner_id)
     if tipo_doc:
         query = query.filter(models.Comprobante.tipo_doc == tipo_doc)
     return query.order_by(models.Comprobante.id.desc()).all()
@@ -93,10 +93,8 @@ def get_next_correlativo(db: Session, owner_id: int, serie: str, tipo_doc: str) 
         return "1"
     return str(int(last_comprobante.correlativo) + 1)
 
-# --- NUEVAS FUNCIONES PARA GUÍA DE REMISIÓN ---
-
+# --- Funciones para Guía de Remisión ---
 def get_next_guia_correlativo(db: Session, owner_id: int, serie: str) -> str:
-    """Obtiene el siguiente número correlativo para una serie de guía de remisión."""
     last_guia = db.query(models.GuiaRemision)\
         .filter(models.GuiaRemision.owner_id == owner_id, models.GuiaRemision.serie == serie)\
         .order_by(models.GuiaRemision.correlativo.desc())\
@@ -106,7 +104,6 @@ def get_next_guia_correlativo(db: Session, owner_id: int, serie: str) -> str:
     return str(int(last_guia.correlativo) + 1)
 
 def create_guia_remision(db: Session, guia_data: schemas.GuiaRemisionDB, owner_id: int, serie: str, correlativo: str, fecha_emision: datetime):
-    """Crea un nuevo registro de Guía de Remisión en la base de datos."""
     db_guia = models.GuiaRemision(
         **guia_data.model_dump(),
         owner_id=owner_id,
@@ -120,10 +117,84 @@ def create_guia_remision(db: Session, guia_data: schemas.GuiaRemisionDB, owner_i
     return db_guia
 
 def get_guias_remision_by_owner(db: Session, owner_id: int):
-    """Obtiene todas las guías de remisión de un usuario."""
     return db.query(models.GuiaRemision)\
         .filter(models.GuiaRemision.owner_id == owner_id)\
         .order_by(models.GuiaRemision.id.desc()).all()
+
+# --- Funciones para Notas ---
+def get_next_nota_correlativo(db: Session, owner_id: int, serie: str, tipo_doc: str) -> str:
+    last_nota = db.query(models.Nota)\
+        .filter(models.Nota.owner_id == owner_id, models.Nota.serie == serie, models.Nota.tipo_doc == tipo_doc)\
+        .order_by(models.Nota.correlativo.desc())\
+        .first()
+    if not last_nota or not last_nota.correlativo:
+        return "1"
+    return str(int(last_nota.correlativo) + 1)
+
+def create_nota(db: Session, nota_data: schemas.NotaDB, owner_id: int, comprobante_afectado_id: int, tipo_doc: str, serie: str, correlativo: str, fecha_emision: datetime, cod_motivo: str):
+    db_nota = models.Nota(
+        **nota_data.model_dump(),
+        owner_id=owner_id,
+        comprobante_afectado_id=comprobante_afectado_id,
+        tipo_doc=tipo_doc,
+        serie=serie,
+        correlativo=correlativo,
+        fecha_emision=fecha_emision,
+        cod_motivo=cod_motivo
+    )
+    db.add(db_nota)
+    db.commit()
+    db.refresh(db_nota)
+    return db_nota
+
+def get_notas_by_owner(db: Session, owner_id: int):
+    return db.query(models.Nota)\
+        .filter(models.Nota.owner_id == owner_id)\
+        .order_by(models.Nota.id.desc()).all()
+        
+# --- FUNCIONES CORREGIDAS ---
+def get_next_resumen_correlativo(db: Session, owner_id: int, fecha: datetime) -> int:
+    last_resumen = db.query(models.ResumenDiario)\
+        .filter(models.ResumenDiario.owner_id == owner_id, cast(models.ResumenDiario.fecha_resumen, Date) == fecha.date())\
+        .order_by(models.ResumenDiario.correlativo.desc())\
+        .first()
+    if not last_resumen:
+        return 1
+    return int(last_resumen.correlativo) + 1
+
+def create_resumen_diario(db: Session, resumen_data: schemas.ResumenDiarioDB, owner_id: int, fecha_resumen: datetime, correlativo: int):
+    db_resumen = models.ResumenDiario(
+        **resumen_data.model_dump(),
+        owner_id=owner_id,
+        fecha_resumen=fecha_resumen,
+        correlativo=str(correlativo) # Se guarda como string en el modelo
+    )
+    db.add(db_resumen)
+    db.commit()
+    db.refresh(db_resumen)
+    return db_resumen
+
+def get_next_baja_correlativo(db: Session, owner_id: int, fecha: datetime) -> int:
+    last_baja = db.query(models.ComunicacionBaja)\
+        .filter(models.ComunicacionBaja.owner_id == owner_id, cast(models.ComunicacionBaja.fecha_comunicacion, Date) == fecha.date())\
+        .order_by(models.ComunicacionBaja.correlativo.desc())\
+        .first()
+    if not last_baja:
+        return 1
+    return int(last_baja.correlativo) + 1
+
+def create_comunicacion_baja(db: Session, baja_data: schemas.ComunicacionBajaDB, owner_id: int, fecha_comunicacion: datetime, correlativo: int):
+    db_baja = models.ComunicacionBaja(
+        **baja_data.model_dump(),
+        owner_id=owner_id,
+        fecha_comunicacion=fecha_comunicacion,
+        correlativo=str(correlativo) # Se guarda como string en el modelo
+    )
+    db.add(db_baja)
+    db.commit()
+    db.refresh(db_baja)
+    return db_baja
+
 
 # --- Funciones de Administrador ---
 def get_admin_dashboard_stats(db: Session):

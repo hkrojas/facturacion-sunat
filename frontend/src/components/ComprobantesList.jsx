@@ -4,9 +4,10 @@ import { AuthContext } from '../context/AuthContext';
 import { ToastContext } from '../context/ToastContext';
 import LoadingSpinner from './LoadingSpinner';
 import Button from './Button';
+import NotaModal from './NotaModal';
 import { API_URL } from '../config';
 
-const ComprobanteDetailsModal = ({ comprobante, onClose, token }) => {
+const ComprobanteDetailsModal = ({ comprobante, onClose, token, onEmitirNota }) => {
     const { addToast } = useContext(ToastContext);
     const [downloading, setDownloading] = useState(null);
 
@@ -98,8 +99,11 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token }) => {
                         </div>
 
                         <div>
-                            <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">Descargas Disponibles</h3>
-                            <div className="flex space-x-3">
+                            <h3 className="text-lg font-semibold text-gray-700 dark:text-gray-300 mb-3">Acciones y Descargas</h3>
+                            <div className="flex flex-wrap gap-3">
+                                {comprobante.success && (
+                                    <Button onClick={onEmitirNota} variant="primary">Emitir Nota de Crédito</Button>
+                                )}
                                 <Button onClick={() => downloadFile('pdf')} loading={downloading === 'pdf'} variant="secondary">PDF Personalizado</Button>
                                 <Button onClick={() => downloadFile('xml')} loading={downloading === 'xml'} variant="secondary">XML</Button>
                                 {cdrResponse && <Button onClick={() => downloadFile('cdr')} loading={downloading === 'cdr'} variant="secondary">CDR (ZIP)</Button>}
@@ -118,36 +122,39 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token }) => {
     );
 };
 
-const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
+
+const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
     const [comprobantes, setComprobantes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const { token } = useContext(AuthContext);
     const [viewingComprobante, setViewingComprobante] = useState(null);
-    
+    const [creatingNotaFor, setCreatingNotaFor] = useState(null);
+
     const EyeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.73 6.957 5.475 4.5 10 4.5s8.27 2.457 9.542 5.5c-1.272 3.043-5.068 5.5-9.542 5.5S1.73 13.043.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>;
 
-    useEffect(() => {
-        const fetchComprobantes = async () => {
-            if (!token) return;
-            setLoading(true);
-            setError('');
-            try {
-                const url = new URL(`${API_URL}/comprobantes/`);
-                if (tipoDoc) {
-                    url.searchParams.append('tipo_doc', tipoDoc);
-                }
+    const fetchComprobantes = async () => {
+        if (!token) return;
+        setLoading(true);
+        setError('');
+        try {
+            const url = new URL(`${API_URL}/comprobantes/`);
+            if (tipoDoc) {
+                url.searchParams.append('tipo_doc', tipoDoc);
+            }
 
-                const response = await fetch(url, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                if (!response.ok) throw new Error('No se pudieron cargar los comprobantes.');
-                const data = await response.json();
-                setComprobantes(data);
-            } catch (err) { setError(err.message); }
-            finally { setLoading(false); }
-        };
+            const response = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) throw new Error('No se pudieron cargar los comprobantes.');
+            const data = await response.json();
+            setComprobantes(data);
+        } catch (err) { setError(err.message); }
+        finally { setLoading(false); }
+    };
+    
+    useEffect(() => {
         fetchComprobantes();
     }, [token, tipoDoc, refreshTrigger]);
 
@@ -155,7 +162,7 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
     const formatDate = (dateString) => new Date(dateString).toLocaleDateString('es-ES');
 
     const filteredComprobantes = comprobantes.filter(c =>
-        c.payload_enviado.client.rznSocial.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (c.payload_enviado?.client?.rznSocial || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
         `${c.serie}-${c.correlativo}`.includes(searchTerm)
     );
 
@@ -164,7 +171,24 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
 
     return (
         <>
-            {viewingComprobante && <ComprobanteDetailsModal comprobante={viewingComprobante} onClose={() => setViewingComprobante(null)} token={token} />}
+            {viewingComprobante && <ComprobanteDetailsModal 
+                comprobante={viewingComprobante} 
+                onClose={() => setViewingComprobante(null)} 
+                token={token}
+                onEmitirNota={() => {
+                    setCreatingNotaFor(viewingComprobante);
+                    setViewingComprobante(null);
+                }}
+            />}
+            {creatingNotaFor && <NotaModal 
+                comprobanteAfectado={creatingNotaFor}
+                onClose={() => setCreatingNotaFor(null)}
+                onNotaCreada={() => {
+                    fetchComprobantes();
+                    if (onNotaCreada) onNotaCreada();
+                }}
+            />}
+            
             <div>
                 <div className="flex flex-col sm:flex-row justify-between items-center mb-6 gap-4">
                     <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-200">
@@ -188,23 +212,33 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
                                     <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-4/12">Cliente</th>
                                     <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Fecha</th>
                                     <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Total</th>
-                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-1/12">Estado</th>
-                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Acciones</th>
+                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-2/12">Estado</th>
+                                    <th className="px-6 py-3 text-center text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider w-1/12">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-200 dark:divide-gray-700 text-gray-900 dark:text-gray-100">
-                                {filteredComprobantes.map((c) => (
+                                {filteredComprobantes.map((c) => {
+                                    const isAnulada = c.notas_afectadas && c.notas_afectadas.some(n => n.success && n.cod_motivo === '01');
+
+                                    return (
                                     <tr key={c.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 even:bg-gray-50 dark:even:bg-gray-800/50">
                                         <td className="px-6 py-4 whitespace-nowrap">{c.serie}-{c.correlativo}</td>
                                         <td className="px-6 py-4 truncate-cell" title={c.payload_enviado.client.rznSocial}>
                                             {c.payload_enviado.client.rznSocial}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(c.fecha_emision)}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap font-semibold">{getCurrencySymbol(c.payload_enviado.tipoMoneda)} {c.payload_enviado.mtoImpVenta.toFixed(2)}</td>
+                                        <td className={`px-6 py-4 whitespace-nowrap font-semibold ${isAnulada ? 'line-through text-gray-400' : ''}`}>{getCurrencySymbol(c.payload_enviado.tipoMoneda)} {c.payload_enviado.mtoImpVenta.toFixed(2)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-center">
-                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${c.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
-                                                {c.success ? 'Aceptado' : 'Rechazado'}
-                                            </span>
+                                            <div className="flex flex-col items-center gap-1">
+                                                <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${c.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
+                                                    {c.success ? 'Aceptado' : 'Rechazado'}
+                                                </span>
+                                                {isAnulada && (
+                                                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-800/50 dark:text-yellow-300">
+                                                        Anulada
+                                                    </span>
+                                                )}
+                                            </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-center">
                                             <Button 
@@ -212,12 +246,13 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger }) => {
                                                 variant="ghost" 
                                                 className="text-sm"
                                                 icon={<EyeIcon />}
+                                                disabled={isAnulada}
                                             >
                                                 Detalles
                                             </Button>
                                         </td>
                                     </tr>
-                                ))}
+                                )})}
                             </tbody>
                         </table>
                     </div>

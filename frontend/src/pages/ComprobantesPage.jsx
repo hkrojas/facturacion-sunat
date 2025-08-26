@@ -1,14 +1,15 @@
 // frontend/src/pages/ComprobantesPage.jsx
 import React, { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom'; // Importar useNavigate
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import ComprobantesList from '../components/ComprobantesList';
-import CrearComprobanteForm from '../components/CrearComprobanteForm'; // Importar el nuevo formulario
+import CrearComprobanteForm from '../components/CrearComprobanteForm';
+import NotasEmitidasList from '../components/NotasEmitidasList'; // <-- 1. IMPORTAR LISTA DE NOTAS
 
 const ComprobantesPage = () => {
     const location = useLocation();
-    const navigate = useNavigate(); // Hook para navegar
+    const navigate = useNavigate();
 
     const getTabFromQuery = () => {
         const params = new URLSearchParams(location.search);
@@ -25,15 +26,18 @@ const ComprobantesPage = () => {
 
     const handleTabClick = (tab) => {
         setActiveTab(tab);
-        // Actualizar la URL sin recargar la página
         navigate(`/comprobantes?tab=${tab}`);
     };
 
     const handleComprobanteCreado = () => {
-        // Activa el trigger para refrescar la lista
         setRefreshTrigger(prev => prev + 1);
-        // Cambia a la pestaña de facturas para ver el nuevo comprobante
         handleTabClick('facturas');
+    };
+    
+    // --- 2. NUEVA FUNCIÓN PARA MANEJAR NOTAS CREADAS ---
+    const handleNotaCreada = () => {
+        setRefreshTrigger(prev => prev + 1);
+        handleTabClick('notas');
     };
 
     const tabStyle = "px-6 py-3 font-semibold text-base border-b-2 transition-colors duration-300 focus:outline-none";
@@ -71,9 +75,10 @@ const ComprobantesPage = () => {
                         </button>
                     </div>
                     <Card className="rounded-t-none">
-                        {activeTab === 'facturas' && <ComprobantesList tipoDoc="01" refreshTrigger={refreshTrigger} />}
-                        {activeTab === 'boletas' && <ComprobantesList tipoDoc="03" refreshTrigger={refreshTrigger} />}
-                        {activeTab === 'notas' && <div className="text-center py-12 text-gray-500"><p>La gestión de Notas de Crédito estará disponible próximamente.</p></div>}
+                        {/* --- 3. PASAR LA NUEVA FUNCIÓN A LOS COMPONENTES --- */}
+                        {activeTab === 'facturas' && <ComprobantesList tipoDoc="01" refreshTrigger={refreshTrigger} onNotaCreada={handleNotaCreada} />}
+                        {activeTab === 'boletas' && <ComprobantesList tipoDoc="03" refreshTrigger={refreshTrigger} onNotaCreada={handleNotaCreada} />}
+                        {activeTab === 'notas' && <NotasEmitidasList refreshTrigger={refreshTrigger} />}
                         {activeTab === 'crear' && <CrearComprobanteForm onComprobanteCreado={handleComprobanteCreado} />}
                     </Card>
                 </div>

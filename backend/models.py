@@ -36,10 +36,12 @@ class User(Base):
 
     cotizaciones = relationship("Cotizacion", back_populates="owner", cascade="all, delete-orphan")
     comprobantes = relationship("Comprobante", back_populates="owner", cascade="all, delete-orphan")
-    
-    # --- NUEVA RELACIÓN ---
-    # Añadimos la relación con las guías de remisión
     guias_remision = relationship("GuiaRemision", back_populates="owner", cascade="all, delete-orphan")
+    notas = relationship("Nota", back_populates="owner", cascade="all, delete-orphan")
+    
+    # --- NUEVAS RELACIONES ---
+    resumenes_diarios = relationship("ResumenDiario", back_populates="owner", cascade="all, delete-orphan")
+    comunicaciones_baja = relationship("ComunicacionBaja", back_populates="owner", cascade="all, delete-orphan")
 
 
 class Cotizacion(Base):
@@ -57,7 +59,6 @@ class Cotizacion(Base):
     
     owner = relationship("User", back_populates="cotizaciones")
     productos = relationship("Producto", back_populates="cotizacion", cascade="all, delete-orphan")
-    
     comprobante = relationship("Comprobante", back_populates="cotizacion", uselist=False, cascade="all, delete-orphan")
 
 class Producto(Base):
@@ -90,10 +91,11 @@ class Comprobante(Base):
 
     owner = relationship("User", back_populates="comprobantes")
     cotizacion = relationship("Cotizacion", back_populates="comprobante")
+    notas_afectadas = relationship("Nota", back_populates="comprobante_afectado")
 
-# --- NUEVO MODELO PARA GUÍA DE REMISIÓN ---
 class GuiaRemision(Base):
     __tablename__ = "guias_remision"
+    # ... (código existente sin cambios) ...
     id = Column(Integer, primary_key=True, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
@@ -114,3 +116,58 @@ class GuiaRemision(Base):
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
     owner = relationship("User", back_populates="guias_remision")
+
+
+class Nota(Base):
+    __tablename__ = "notas"
+    # ... (código existente sin cambios) ...
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    comprobante_afectado_id = Column(Integer, ForeignKey("comprobantes.id"), nullable=False)
+
+    tipo_doc = Column(String) # 07 para N.C., 08 para N.D.
+    serie = Column(String)
+    correlativo = Column(String)
+    fecha_emision = Column(DateTime(timezone=True))
+    cod_motivo = Column(String) # Código del motivo de la nota
+
+    success = Column(Boolean, default=False)
+    sunat_response = Column(JSON, nullable=True)
+    sunat_hash = Column(String, nullable=True)
+    payload_enviado = Column(JSON, nullable=True)
+    
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+
+    owner = relationship("User", back_populates="notas")
+    comprobante_afectado = relationship("Comprobante", back_populates="notas_afectadas")
+
+
+# --- NUEVO MODELO PARA RESUMEN DIARIO ---
+class ResumenDiario(Base):
+    __tablename__ = "resumenes_diarios"
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    fecha_resumen = Column(DateTime(timezone=True))
+    correlativo = Column(String) # Correlativo del día (1, 2, 3...)
+    ticket = Column(String, nullable=True)
+    success = Column(Boolean, default=False)
+    sunat_response = Column(JSON, nullable=True)
+    payload_enviado = Column(JSON, nullable=True)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+
+    owner = relationship("User", back_populates="resumenes_diarios")
+
+# --- NUEVO MODELO PARA COMUNICACIÓN DE BAJA ---
+class ComunicacionBaja(Base):
+    __tablename__ = "comunicaciones_baja"
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    fecha_comunicacion = Column(DateTime(timezone=True))
+    correlativo = Column(String)
+    ticket = Column(String, nullable=True)
+    success = Column(Boolean, default=False)
+    sunat_response = Column(JSON, nullable=True)
+    payload_enviado = Column(JSON, nullable=True)
+    fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
+
+    owner = relationship("User", back_populates="comunicaciones_baja")

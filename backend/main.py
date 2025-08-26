@@ -3,15 +3,15 @@
 import requests, os, re, shutil, json, base64
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, cast, Date
 from typing import List, Any, Optional
 from jose import JWTError, jwt
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from datetime import datetime
-from sqlalchemy import func
+from datetime import datetime, date
 
 import crud, models, schemas, security, facturacion_service
 from database import SessionLocal, engine
@@ -219,7 +219,6 @@ def facturar_cotizacion(cotizacion_id: int, request_data: schemas.FacturarReques
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
 
-# --- ENDPOINT NUEVO ---
 @app.post("/comprobantes/directo", response_model=schemas.Comprobante)
 def crear_comprobante_directo(factura_data: schemas.FacturaCreateDirect, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     tipo_doc = factura_data.tipo_comprobante
@@ -231,7 +230,6 @@ def crear_comprobante_directo(factura_data: schemas.FacturaCreateDirect, db: Ses
         serie = "F001" if tipo_doc == "01" else "B001"
         correlativo = crud.get_next_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc)
 
-        # Usaremos una nueva función de servicio para convertir estos datos
         invoice_payload = facturacion_service.convert_direct_invoice_to_payload(
             factura_data=factura_data,
             user=current_user,
@@ -253,10 +251,145 @@ def crear_comprobante_directo(factura_data: schemas.FacturaCreateDirect, db: Ses
             payload_enviado=invoice_payload
         )
 
-        # Creamos el comprobante sin cotizacion_id
         nuevo_comprobante = crud.create_comprobante(db, comprobante=comprobante_data, owner_id=current_user.id)
         
         return nuevo_comprobante
+
+    except facturacion_service.FacturacionException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
+
+@app.post("/notas/", response_model=schemas.Nota)
+def crear_nota(nota_data: schemas.NotaCreateAPI, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    comprobante_afectado = crud.get_comprobante_by_id(db, comprobante_id=nota_data.comprobante_afectado_id, owner_id=current_user.id)
+    if not comprobante_afectado:
+        raise HTTPException(status_code=404, detail="El comprobante que intenta modificar no fue encontrado.")
+
+    try:
+        token = facturacion_service.get_apisperu_token(db, current_user)
+        
+        tipo_doc_nota = "07" if nota_data.tipo_nota == "credito" else "08"
+        serie_base = "F" if comprobante_afectado.serie.startswith("F") else "B"
+        
+        if tipo_doc_nota == "07":
+            serie = "FF01" if serie_base == "F" else "BB01"
+        else:
+            serie = "FD01" if serie_base == "F" else "BD01"
+
+        correlativo = crud.get_next_nota_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc_nota)
+
+        note_payload = facturacion_service.convert_data_to_note_payload(
+            comprobante_afectado, nota_data, current_user, serie, correlativo, tipo_doc_nota
+        )
+
+        api_response = facturacion_service.send_note(token, note_payload)
+
+        sunat_response_data = api_response.get('sunatResponse', {})
+        nota_db_data = schemas.NotaDB(
+            success=sunat_response_data.get('success', False),
+            sunat_response=sunat_response_data,
+            sunat_hash=api_response.get('hash'),
+            payload_enviado=note_payload
+        )
+        
+        nueva_nota = crud.create_nota(
+            db, nota_db_data, current_user.id, comprobante_afectado.id,
+            tipo_doc_nota, serie, correlativo, datetime.fromisoformat(note_payload['fechaEmision']), nota_data.cod_motivo
+        )
+        
+        return nueva_nota
+
+    except facturacion_service.FacturacionException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado al crear la nota: {e}")
+
+@app.get("/notas/", response_model=List[schemas.Nota])
+def read_notas(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    return crud.get_notas_by_owner(db=db, owner_id=current_user.id)
+
+class ResumenRequest(BaseModel):
+    fecha: date
+
+@app.post("/resumen-diario/", response_model=schemas.ResumenDiario)
+def enviar_resumen_diario(request: ResumenRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    fecha_dt = datetime.combine(request.fecha, datetime.min.time())
+    
+    todas_las_boletas = db.query(models.Comprobante).filter(
+        models.Comprobante.owner_id == current_user.id,
+        models.Comprobante.tipo_doc == '03',
+        cast(models.Comprobante.fecha_emision, Date) == request.fecha
+    ).options(joinedload(models.Comprobante.notas_afectadas)).all()
+
+    # --- CORRECCIÓN AÑADIDA ---
+    # Filtramos las boletas que han sido anuladas con una nota de crédito exitosa.
+    boletas_a_enviar = []
+    for boleta in todas_las_boletas:
+        is_anulada = any(
+            nota.success and nota.cod_motivo == '01' 
+            for nota in boleta.notas_afectadas
+        )
+        if not is_anulada:
+            boletas_a_enviar.append(boleta)
+    # --- FIN DE LA CORRECCIÓN ---
+
+    if not boletas_a_enviar:
+        raise HTTPException(status_code=404, detail="No se encontraron boletas válidas (no anuladas) para la fecha especificada.")
+
+    try:
+        token = facturacion_service.get_apisperu_token(db, current_user)
+        correlativo = crud.get_next_resumen_correlativo(db, owner_id=current_user.id, fecha=fecha_dt)
+        
+        summary_payload = facturacion_service.convert_boletas_to_summary_payload(boletas_a_enviar, current_user, fecha_dt, correlativo)
+        api_response = facturacion_service.send_summary(token, summary_payload)
+
+        sunat_response_data = api_response.get('sunatResponse', {})
+        resumen_db_data = schemas.ResumenDiarioDB(
+            ticket=sunat_response_data.get('ticket'),
+            success=sunat_response_data.get('success', True),
+            sunat_response=sunat_response_data,
+            payload_enviado=summary_payload
+        )
+        
+        nuevo_resumen = crud.create_resumen_diario(db, resumen_db_data, current_user.id, fecha_dt, correlativo)
+        return nuevo_resumen
+
+    except facturacion_service.FacturacionException as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ocurrió un error inesperado: {e}")
+
+@app.post("/comunicacion-baja/", response_model=schemas.ComunicacionBaja)
+def enviar_comunicacion_baja(request: schemas.ComunicacionBajaCreateAPI, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if not request.items_a_dar_de_baja:
+        raise HTTPException(status_code=400, detail="Debe proporcionar al menos un comprobante para dar de baja.")
+
+    items_con_comprobantes = []
+    for item in request.items_a_dar_de_baja:
+        comprobante = crud.get_comprobante_by_id(db, item.comprobante_id, current_user.id)
+        if not comprobante or comprobante.tipo_doc != '01':
+            raise HTTPException(status_code=404, detail=f"La factura con ID {item.comprobante_id} no fue encontrada o no es una factura.")
+        items_con_comprobantes.append({"comprobante": comprobante, "motivo": item.motivo})
+
+    try:
+        token = facturacion_service.get_apisperu_token(db, current_user)
+        fecha_comunicacion = datetime.now()
+        correlativo = crud.get_next_baja_correlativo(db, current_user.id, fecha_comunicacion)
+
+        voided_payload = facturacion_service.convert_facturas_to_voided_payload(items_con_comprobantes, current_user, fecha_comunicacion, correlativo)
+        api_response = facturacion_service.send_voided(token, voided_payload)
+
+        sunat_response_data = api_response.get('sunatResponse', {})
+        baja_db_data = schemas.ComunicacionBajaDB(
+            ticket=sunat_response_data.get('ticket'),
+            success=sunat_response_data.get('success', True),
+            sunat_response=sunat_response_data,
+            payload_enviado=voided_payload
+        )
+
+        nueva_baja = crud.create_comunicacion_baja(db, baja_db_data, current_user.id, fecha_comunicacion, correlativo)
+        return nueva_baja
 
     except facturacion_service.FacturacionException as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -357,7 +490,7 @@ def create_new_guia_remision(guia_data: schemas.GuiaRemisionCreateAPI, db: Sessi
 def read_guias_remision(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return crud.get_guias_remision_by_owner(db=db, owner_id=current_user.id)
 
-# --- Endpoints de Administrador (sin cambios) ---
+# --- Endpoints de Administrador ---
 @app.get("/admin/stats/", response_model=schemas.AdminDashboardStats)
 def get_admin_stats(db: Session = Depends(get_db), admin_user: models.User = Depends(get_current_admin_user)):
     return crud.get_admin_dashboard_stats(db)

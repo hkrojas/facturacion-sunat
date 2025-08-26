@@ -6,12 +6,27 @@ import base64
 from datetime import datetime, timedelta, timezone, date
 from sqlalchemy.orm import Session
 from num2words import num2words
+from typing import List
 import models, security, schemas
 from config import settings
 
 class FacturacionException(Exception):
     """Excepción personalizada para errores de facturación."""
     pass
+
+# --- Helper para formatear fechas correctamente para la API ---
+def format_date_for_api(dt: datetime) -> str:
+    """Formatea la fecha al formato ISO 8601 con ':' en la zona horaria."""
+    return dt.isoformat()
+
+def monto_a_letras(amount: float, currency: str) -> str:
+    """Convierte un monto a su representación en palabras para la leyenda."""
+    currency_name = "SOLES" if currency == "PEN" else "DÓLARES AMERICANOS"
+    parts = f"{amount:.2f}".split('.')
+    integer_part = int(parts[0])
+    decimal_part = parts[1]
+    text_integer = num2words(integer_part, lang='es').upper()
+    return f"SON {text_integer} CON {decimal_part}/100 {currency_name}"
 
 def get_apisperu_token(db: Session, user: models.User) -> str:
     if user.apisperu_token and user.apisperu_token_expires:
@@ -80,20 +95,10 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
     mto_igv = sum(d['igv'] for d in details)
     total_venta = mto_oper_gravadas + mto_igv
     
-    def get_legend_value(amount, currency):
-        currency_name = "SOLES" if currency == "PEN" else "DÓLARES AMERICANOS"
-        parts = f"{amount:.2f}".split('.')
-        integer_part = int(parts[0])
-        decimal_part = parts[1]
-        text_integer = num2words(integer_part, lang='es').upper()
-        return f"SON {text_integer} CON {decimal_part}/100 {currency_name}"
-    
     tipo_moneda_api = "PEN" if cotizacion.moneda == "SOLES" else "USD"
-    legend_value = get_legend_value(total_venta, tipo_moneda_api)
-    peru_tz = timezone(timedelta(hours=-5))
-    now_in_peru = datetime.now(peru_tz)
-    fecha_emision_formateada = now_in_peru.strftime('%Y-%m-%dT%H:%M:%S%z')
-    fecha_emision_final = fecha_emision_formateada[:-2] + ':' + fecha_emision_formateada[-2:]
+    legend_value = monto_a_letras(total_venta, tipo_moneda_api)
+    
+    fecha_emision_final = format_date_for_api(datetime.now(timezone(timedelta(hours=-5))))
 
     payload = {
         "ublVersion": "2.1", "tipoOperacion": "0101", 
@@ -114,7 +119,6 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
     }
     return payload
 
-# --- FUNCIÓN NUEVA ---
 def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect, user: models.User, serie: str, correlativo: str) -> dict:
     if not all([user.business_ruc, user.business_name, user.business_address]):
         raise FacturacionException("Datos de la empresa (RUC, Razón Social, Dirección) incompletos en el perfil.")
@@ -142,20 +146,10 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
     mto_igv = mto_oper_gravadas * 0.18
     total_venta = mto_oper_gravadas + mto_igv
 
-    def get_legend_value(amount, currency):
-        currency_name = "SOLES" if currency == "PEN" else "DÓLARES AMERICANOS"
-        parts = f"{amount:.2f}".split('.')
-        integer_part = int(parts[0])
-        decimal_part = parts[1]
-        text_integer = num2words(integer_part, lang='es').upper()
-        return f"SON {text_integer} CON {decimal_part}/100 {currency_name}"
-
     tipo_moneda_api = "PEN" if factura_data.moneda == "SOLES" else "USD"
-    legend_value = get_legend_value(total_venta, tipo_moneda_api)
-    peru_tz = timezone(timedelta(hours=-5))
-    now_in_peru = datetime.now(peru_tz)
-    fecha_emision_formateada = now_in_peru.strftime('%Y-%m-%dT%H:%M:%S%z')
-    fecha_emision_final = fecha_emision_formateada[:-2] + ':' + fecha_emision_formateada[-2:]
+    legend_value = monto_a_letras(total_venta, tipo_moneda_api)
+    
+    fecha_emision_final = format_date_for_api(datetime.now(timezone(timedelta(hours=-5))))
 
     payload = {
         "ublVersion": "2.1", "tipoOperacion": "0101", 
@@ -178,11 +172,6 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
 
 def send_invoice(token: str, payload: dict) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    
-    print("--- PAYLOAD DE FACTURA/BOLETA A ENVIAR ---")
-    print(json.dumps(payload, indent=4))
-    print("------------------------------------------")
-
     try:
         response = requests.post(f"{settings.APISPERU_URL}/invoice/send", headers=headers, json=payload)
         if response.status_code >= 400:
@@ -195,6 +184,121 @@ def send_invoice(token: str, payload: dict) -> dict:
         return response.json()
     except requests.exceptions.RequestException as e:
         raise FacturacionException(f"Error de conexión al enviar la factura: {e}")
+
+def convert_data_to_note_payload(comprobante_afectado: models.Comprobante, nota_data: schemas.NotaCreateAPI, user: models.User, serie: str, correlativo: str, tipo_doc_nota: str) -> dict:
+    comprobante_original = comprobante_afectado.payload_enviado
+    if not comprobante_original:
+        raise FacturacionException("El comprobante a anular no tiene datos de envío.")
+
+    leyenda_valor = monto_a_letras(comprobante_original['mtoImpVenta'], comprobante_original['tipoMoneda'])
+    
+    fecha_emision_final = format_date_for_api(datetime.now(timezone(timedelta(hours=-5))))
+
+    payload = {
+        "ublVersion": "2.1",
+        "tipoDoc": tipo_doc_nota,
+        "serie": serie,
+        "correlativo": correlativo,
+        "fechaEmision": fecha_emision_final,
+        "tipDocAfectado": comprobante_afectado.tipo_doc,
+        "numDocfectado": f"{comprobante_afectado.serie}-{comprobante_afectado.correlativo}",
+        "codMotivo": nota_data.cod_motivo,
+        "desMotivo": nota_data.descripcion_motivo,
+        "tipoMoneda": comprobante_original['tipoMoneda'],
+        "client": comprobante_original['client'],
+        "company": comprobante_original['company'],
+        "mtoOperGravadas": comprobante_original.get('mtoOperGravadas', 0),
+        "mtoIGV": comprobante_original.get('mtoIGV', 0),
+        "totalImpuestos": comprobante_original.get('totalImpuestos', 0),
+        "mtoImpVenta": comprobante_original.get('mtoImpVenta', 0),
+        "details": comprobante_original['details'],
+        "legends": [{"code": "1000", "value": leyenda_valor}]
+    }
+    return payload
+
+def send_note(token: str, payload: dict) -> dict:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        response = requests.post(f"{settings.APISPERU_URL}/note/send", headers=headers, json=payload)
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+                error_message = error_data.get('message') or str(error_data)
+            except json.JSONDecodeError:
+                error_message = response.text
+            raise FacturacionException(f"Error {response.status_code} de la API: {error_message}")
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise FacturacionException(f"Error de conexión al enviar la nota: {e}")
+
+def convert_boletas_to_summary_payload(boletas_del_dia: List[models.Comprobante], user: models.User, fecha_resumen: datetime, correlativo: int) -> dict:
+    if not all([user.business_ruc, user.business_name, user.business_address]):
+        raise FacturacionException("Datos de la empresa incompletos en el perfil.")
+
+    details = []
+    for boleta in boletas_del_dia:
+        payload = boleta.payload_enviado
+        details.append({
+            "tipoDoc": boleta.tipo_doc,
+            "serieNro": f"{boleta.serie}-{boleta.correlativo}",
+            "estado": "1", # 1: Adicionar
+            "clienteTipo": payload['client']['tipoDoc'],
+            "clienteNro": payload['client']['numDoc'],
+            "total": payload['mtoImpVenta'],
+            "mtoOperGravadas": payload['mtoOperGravadas'],
+            "mtoOperInafectas": payload.get('mtoOperInafectas', 0),
+            "mtoOperExoneradas": payload.get('mtoOperExoneradas', 0),
+            "mtoIGV": payload['mtoIGV']
+        })
+
+    fecha_generacion_str = format_date_for_api(fecha_resumen)
+
+    return {
+        "fecGeneracion": fecha_generacion_str,
+        "fecResumen": fecha_generacion_str,
+        "correlativo": f"{correlativo:03d}",
+        "moneda": "PEN",
+        "company": { "ruc": user.business_ruc, "razonSocial": user.business_name, },
+        "details": details
+    }
+
+def send_summary(token: str, payload: dict) -> dict:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        response = requests.post(f"{settings.APISPERU_URL}/summary/send", headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise FacturacionException(f"Error de conexión al enviar el resumen: {e}")
+
+def convert_facturas_to_voided_payload(items_baja: List[dict], user: models.User, fecha_comunicacion: datetime, correlativo: int) -> dict:
+    details = []
+    for item in items_baja:
+        details.append({
+            "tipoDoc": item['comprobante'].tipo_doc,
+            "serie": item['comprobante'].serie,
+            "correlativo": item['comprobante'].correlativo,
+            "desMotivoBaja": item['motivo']
+        })
+
+    fecha_comunicacion_str = format_date_for_api(fecha_comunicacion)
+
+    return {
+        "fecGeneracion": fecha_comunicacion_str,
+        "fecComunicacion": fecha_comunicacion_str,
+        "correlativo": f"{correlativo:03d}",
+        "company": { "ruc": user.business_ruc, "razonSocial": user.business_name },
+        "details": details
+    }
+
+def send_voided(token: str, payload: dict) -> dict:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        response = requests.post(f"{settings.APISPERU_URL}/voided/send", headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise FacturacionException(f"Error de conexión al enviar la comunicación de baja: {e}")
 
 def get_document_xml(token: str, comprobante: models.Comprobante) -> bytes:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -232,9 +336,8 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
         raise FacturacionException("Datos de la empresa (RUC, Razón Social) incompletos en el perfil.")
 
     peru_tz = timezone(timedelta(hours=-5))
-    now_in_peru = datetime.now(peru_tz)
-    fecha_emision_formateada = now_in_peru.strftime('%Y-%m-%dT%H:%M:%S%z')
-    fecha_emision_final = fecha_emision_formateada[:-2] + ':' + fecha_emision_formateada[-2:]
+    
+    fecha_emision_final = format_date_for_api(datetime.now(peru_tz))
 
     bienes_corregidos = []
     for i, bien in enumerate(guia_data.bienes):
@@ -271,8 +374,7 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
     descripcion_traslado = motivos_traslado.get(guia_data.codTraslado, "OTROS")
 
     fecha_traslado_dt = datetime.combine(guia_data.fecTraslado, datetime.min.time())
-    fecha_traslado_final = fecha_traslado_dt.replace(tzinfo=peru_tz).strftime('%Y-%m-%dT%H:%M:%S%z')
-    fecha_traslado_final = fecha_traslado_final[:-2] + ':' + fecha_traslado_final[-2:]
+    fecha_traslado_final = format_date_for_api(fecha_traslado_dt.replace(tzinfo=peru_tz))
     
     envio_data = {
         "modTraslado": guia_data.modTraslado,
@@ -321,17 +423,12 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
 def send_guia_remision(token: str, payload: dict) -> dict:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    print("--- PAYLOAD DE GUÍA DE REMISIÓN A ENVIAR ---")
-    print(json.dumps(payload, indent=4))
-    print("------------------------------------------")
-    
     try:
         response = requests.post(f"{settings.APISPERU_URL}/despatch/send", headers=headers, json=payload)
         
         if response.status_code >= 400:
             try:
                 error_data = response.json()
-                print("Error detallado de la API de Guías:", json.dumps(error_data, indent=2))
                 if isinstance(error_data, list):
                     error_message = "; ".join([f"Campo '{err.get('field')}': {err.get('message')}" for err in error_data])
                 else:
