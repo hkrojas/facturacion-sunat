@@ -6,8 +6,40 @@ import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import Button from '../components/Button';
+import Input from '../components/Input'; // Importamos el componente Input
 import { API_URL } from '../config';
 import { parseApiError } from '../utils/apiUtils';
+
+// --- NUEVO COMPONENTE MODAL PARA MOSTRAR EMPRESAS ---
+const CompaniesModal = ({ companies, onClose }) => (
+    <div
+        className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in"
+        onClick={onClose}
+    >
+        <div
+            className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-2xl w-full max-w-lg transform transition-all animate-slide-in-up"
+            onClick={(e) => e.stopPropagation()}
+        >
+            <h2 className="text-xl font-bold text-gray-800 dark:text-gray-200 mb-4 border-b pb-2">Empresas Registradas en Apis Perú</h2>
+            {companies.length > 0 ? (
+                <ul className="space-y-3 max-h-80 overflow-y-auto">
+                    {companies.map(company => (
+                        <li key={company.id} className="p-3 bg-gray-100 dark:bg-gray-700 rounded-md">
+                            <p className="font-semibold text-gray-900 dark:text-gray-100">{company.razon_social}</p>
+                            <p className="text-sm text-gray-600 dark:text-gray-400">RUC: {company.ruc}</p>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <p className="text-gray-500 dark:text-gray-400">No se encontraron empresas registradas en tu cuenta de Apis Perú.</p>
+            )}
+            <div className="mt-6 text-right">
+                <Button onClick={onClose} variant="secondary">Cerrar</Button>
+            </div>
+        </div>
+    </div>
+);
+
 
 const ProfilePage = () => {
     const { user, token, updateUser } = useContext(AuthContext);
@@ -17,6 +49,7 @@ const ProfilePage = () => {
         business_name: '', business_address: '', business_ruc: '',
         business_phone: '', primary_color: '#004aad',
         pdf_note_1: '', pdf_note_1_color: '#FF0000', pdf_note_2: '',
+        apisperu_user: '', apisperu_password: '' // Campos para Apis Perú
     });
     const [bankAccounts, setBankAccounts] = useState([]);
     const [lookupRuc, setLookupRuc] = useState('');
@@ -24,6 +57,10 @@ const ProfilePage = () => {
     const [loadingConsulta, setLoadingConsulta] = useState(false);
     const [loadingProfile, setLoadingProfile] = useState(false);
     const [loadingLogo, setLoadingLogo] = useState(false);
+
+    // --- NUEVOS ESTADOS PARA LA LISTA DE EMPRESAS ---
+    const [companies, setCompanies] = useState(null);
+    const [loadingCompanies, setLoadingCompanies] = useState(false);
 
     useEffect(() => {
         if (user) {
@@ -36,11 +73,33 @@ const ProfilePage = () => {
                 pdf_note_1: user.pdf_note_1 || 'TODO TRABAJO SE REALIZA CON EL 50% DE ADELANTO',
                 pdf_note_1_color: user.pdf_note_1_color || '#FF0000',
                 pdf_note_2: user.pdf_note_2 || 'LOS PRECIOS NO INCLUYEN ENVIOS',
+                apisperu_user: user.apisperu_user || '', // Cargar usuario Apis Perú
+                apisperu_password: '' // No cargar la contraseña por seguridad
             });
             setBankAccounts(Array.isArray(user.bank_accounts) && user.bank_accounts.length > 0 ? user.bank_accounts : []);
             setLookupRuc(user.business_ruc || '');
         }
     }, [user]);
+
+    // --- NUEVA FUNCIÓN PARA OBTENER EMPRESAS ---
+    const handleFetchCompanies = async () => {
+        setLoadingCompanies(true);
+        setCompanies(null);
+        try {
+            const response = await fetch(`${API_URL}/facturacion/empresas`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(parseApiError(data) || 'No se pudieron obtener las empresas.');
+            }
+            setCompanies(data);
+        } catch (err) {
+            addToast(err.message, 'error');
+        } finally {
+            setLoadingCompanies(false);
+        }
+    };
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -54,26 +113,21 @@ const ProfilePage = () => {
         const { name, value } = e.target;
         const newAccounts = [...bankAccounts];
         newAccounts[index][name] = value;
-        
+
         if (name === 'banco' && value.toLowerCase().includes('nación')) {
             newAccounts[index].tipo_cuenta = 'Cuenta Detracción';
-        } else if (name === 'banco') {
-            if (newAccounts[index].tipo_cuenta === 'Cuenta Detracción') {
-                newAccounts[index].tipo_cuenta = 'Cta Ahorro';
-            }
+        } else if (name === 'banco' && newAccounts[index].tipo_cuenta === 'Cuenta Detracción') {
+             // Si cambia de Banco de la Nación a otro y era Cta Detracción, vuelve a Cta Ahorro por defecto
+            newAccounts[index].tipo_cuenta = 'Cta Ahorro';
         }
-        
+
         setBankAccounts(newAccounts);
     };
 
     const addBankAccount = () => {
         if (bankAccounts.length < 3) {
-            setBankAccounts([...bankAccounts, { 
-                banco: '', 
-                tipo_cuenta: 'Cta Ahorro', 
-                moneda: 'Soles', 
-                cuenta: '', 
-                cci: '' 
+            setBankAccounts([...bankAccounts, {
+                banco: '', tipo_cuenta: 'Cta Ahorro', moneda: 'Soles', cuenta: '', cci: ''
             }]);
         } else {
             addToast('Puedes agregar un máximo de 3 cuentas bancarias.', 'error');
@@ -87,8 +141,7 @@ const ProfilePage = () => {
 
     const handleConsultarNegocio = async () => {
         if (!lookupRuc) {
-            addToast('Por favor, ingrese un RUC para buscar.', 'error');
-            return;
+            addToast('Por favor, ingrese un RUC para buscar.', 'error'); return;
         }
         setLoadingConsulta(true);
         try {
@@ -114,7 +167,13 @@ const ProfilePage = () => {
     const handleProfileSubmit = async (e) => {
         e.preventDefault();
         setLoadingProfile(true);
+
         const profileData = { ...formData, bank_accounts: bankAccounts };
+        // No enviar la contraseña si está vacía (para no sobreescribir con nada)
+        if (!profileData.apisperu_password) {
+            delete profileData.apisperu_password;
+        }
+
         try {
             const response = await fetch(`${API_URL}/profile/`, {
                 method: 'PUT',
@@ -127,10 +186,12 @@ const ProfilePage = () => {
                 throw new Error(errorMessage);
             }
             const updatedUser = await response.json();
-            updateUser(updatedUser);
+            updateUser(updatedUser); // Actualiza el contexto global del usuario
+             // Limpiar el campo de contraseña después de guardar exitosamente
+            setFormData(prev => ({ ...prev, apisperu_password: '' }));
             addToast('Perfil guardado con éxito.', 'success');
         } catch (error) {
-            addToast(`Error: ${error.message}`, 'error');
+            addToast(`Error al guardar perfil: ${error.message}`, 'error');
         } finally {
             setLoadingProfile(false);
         }
@@ -139,8 +200,7 @@ const ProfilePage = () => {
     const handleLogoSubmit = async (e) => {
         e.preventDefault();
         if (!logoFile) {
-            addToast('Por favor, selecciona un archivo de logo.', 'error');
-            return;
+            addToast('Por favor, selecciona un archivo de logo.', 'error'); return;
         }
         setLoadingLogo(true);
         const logoFormData = new FormData();
@@ -151,19 +211,27 @@ const ProfilePage = () => {
                 headers: { 'Authorization': `Bearer ${token}` },
                 body: logoFormData,
             });
-            if (!response.ok) throw new Error('Error al subir el logo.');
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(parseApiError(errData) || 'Error al subir el logo.');
+            }
             const updatedUser = await response.json();
-            updateUser(updatedUser);
+            updateUser(updatedUser); // Actualiza el contexto global del usuario
             addToast('Logo subido con éxito.', 'success');
-            setLogoFile(null);
+            setLogoFile(null); // Limpiar el input de archivo
+            // Forzar recarga de la imagen actual (opcional, si la URL no cambia)
+            const imgElement = document.getElementById('current-logo');
+            if (imgElement) {
+                imgElement.src = `${API_URL}/logos/${updatedUser.logo_filename}?t=${new Date().getTime()}`;
+            }
         } catch (error) {
-            addToast(`Error: ${error.message}`, 'error');
+            addToast(`Error al subir logo: ${error.message}`, 'error');
         } finally {
             setLoadingLogo(false);
         }
     };
 
-    const inputStyles = "mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200";
+    // Usar clases de Input en lugar de inputStyles
     const labelStyles = "block text-sm font-medium text-gray-700 dark:text-gray-300";
 
     const headerIcon = (
@@ -174,6 +242,9 @@ const ProfilePage = () => {
 
     return (
         <div className="bg-gray-50 dark:bg-gray-900 min-h-screen transition-colors duration-300">
+             {/* Renderizar el modal si 'companies' tiene datos */}
+            {companies && <CompaniesModal companies={companies} onClose={() => setCompanies(null)} />}
+
             <PageHeader title="Mi Perfil de Negocio" icon={headerIcon}>
                  <Link to="/dashboard" className="font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 transition-colors duration-300">
                     Volver al Dashboard
@@ -182,82 +253,91 @@ const ProfilePage = () => {
 
             <main className="p-4 sm:p-8">
                 <div className="w-full max-w-2xl mx-auto space-y-8">
+                    {/* Formulario principal */}
                     <form onSubmit={handleProfileSubmit} className="space-y-10">
+                        {/* Información del Negocio */}
                         <Card>
                             <div className="space-y-4">
                                 <h2 className="text-xl font-semibold border-b dark:border-gray-700 pb-2 text-gray-800 dark:text-gray-200">Información del Negocio</h2>
                                 <div className="flex space-x-2">
-                                    <input type="text" placeholder="Autocompletar con RUC..." value={lookupRuc} onChange={(e) => setLookupRuc(e.target.value)} className={inputStyles} />
-                                    <Button onClick={handleConsultarNegocio} loading={loadingConsulta} className="whitespace-nowrap">
+                                    <Input
+                                        type="text"
+                                        placeholder="Autocompletar con RUC..."
+                                        value={lookupRuc}
+                                        onChange={(e) => setLookupRuc(e.target.value)}
+                                        className="mt-1" // Usar Input
+                                     />
+                                    <Button onClick={handleConsultarNegocio} loading={loadingConsulta} className="whitespace-nowrap mt-1"> {/* Añadido mt-1 para alinear */}
                                         Buscar
                                     </Button>
                                 </div>
                                 <div>
                                     <label className={labelStyles}>Nombre del Negocio</label>
-                                    <input name="business_name" value={formData.business_name} onChange={handleChange} className={inputStyles} />
+                                    <Input name="business_name" value={formData.business_name} onChange={handleChange} className="mt-1" />
                                 </div>
                                 <div>
                                     <label className={labelStyles}>Dirección</label>
-                                    <input name="business_address" value={formData.business_address} onChange={handleChange} className={inputStyles} />
+                                    <Input name="business_address" value={formData.business_address} onChange={handleChange} className="mt-1" />
                                 </div>
                                 <div>
                                     <label className={labelStyles}>RUC</label>
-                                    <input name="business_ruc" value={formData.business_ruc} onChange={handleChange} className={inputStyles} />
+                                    <Input name="business_ruc" value={formData.business_ruc} onChange={handleChange} className="mt-1" />
                                 </div>
                                 <div>
                                     <label className={labelStyles}>Teléfono</label>
-                                    <input name="business_phone" value={formData.business_phone} onChange={handleChange} className={inputStyles} />
+                                    <Input name="business_phone" value={formData.business_phone} onChange={handleChange} className="mt-1" />
                                 </div>
                             </div>
                         </Card>
 
+                        {/* Personalización PDF */}
                         <Card>
                             <div className="space-y-4">
                                 <h2 className="text-xl font-semibold border-b dark:border-gray-700 pb-2 text-gray-800 dark:text-gray-200">Personalización del PDF</h2>
                                 <div>
                                     <label className={labelStyles}>Color Principal</label>
-                                    <input type="color" name="primary_color" value={formData.primary_color} onChange={handleChange} className="mt-1 block w-full h-10 rounded-md" />
+                                    <Input type="color" name="primary_color" value={formData.primary_color} onChange={handleChange} className="mt-1 block w-full h-10 rounded-md p-1" /> {/* Ajuste de padding para color */}
                                 </div>
                                 <div>
                                     <label className={labelStyles}>Nota 1 (Resaltada)</label>
-                                    <input name="pdf_note_1" value={formData.pdf_note_1} onChange={handleChange} className={inputStyles} />
+                                    <Input name="pdf_note_1" value={formData.pdf_note_1} onChange={handleChange} className="mt-1" />
                                 </div>
                                  <div>
                                     <label className={labelStyles}>Color de Nota 1</label>
-                                    <input type="color" name="pdf_note_1_color" value={formData.pdf_note_1_color} onChange={handleChange} className="mt-1 block w-full h-10 rounded-md" />
+                                    <Input type="color" name="pdf_note_1_color" value={formData.pdf_note_1_color} onChange={handleChange} className="mt-1 block w-full h-10 rounded-md p-1" /> {/* Ajuste de padding */}
                                 </div>
                                 <div>
                                     <label className={labelStyles}>Nota 2</label>
-                                    <input name="pdf_note_2" value={formData.pdf_note_2} onChange={handleChange} className={inputStyles} />
+                                    <Input name="pdf_note_2" value={formData.pdf_note_2} onChange={handleChange} className="mt-1" />
                                 </div>
                             </div>
                         </Card>
 
+                        {/* Datos Bancarios */}
                         <Card>
                             <div className="space-y-4">
-                                <h2 className="text-xl font-semibold border-b dark:border-gray-700 pb-2 text-gray-800 dark:text-gray-200">Datos Bancarios</h2>
+                                <h2 className="text-xl font-semibold border-b dark:border-gray-700 pb-2 text-gray-800 dark:text-gray-200">Datos Bancarios (Máx. 3)</h2>
                                 {bankAccounts.map((account, index) => {
                                     const isBancoNacion = account.banco && account.banco.toLowerCase().includes('nación');
                                     return (
-                                        <div key={index} className="p-4 border dark:border-gray-700 rounded-md space-y-3 relative">
-                                            <h3 className="font-semibold text-gray-800 dark:text-gray-200">Cuenta {index + 1}</h3>
-                                            {bankAccounts.length > 0 && (
-                                                <button type="button" onClick={() => removeBankAccount(index)} className="absolute top-2 right-2 text-red-500 hover:text-red-700 transition-transform duration-200 hover:scale-125">
+                                        <div key={index} className="p-4 border dark:border-gray-700 rounded-md space-y-3 relative bg-gray-50 dark:bg-gray-700/50">
+                                            <div className="flex justify-between items-center">
+                                                <h3 className="font-semibold text-gray-800 dark:text-gray-200">Cuenta {index + 1}</h3>
+                                                <button type="button" onClick={() => removeBankAccount(index)} className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition-transform duration-200 hover:scale-125">
                                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" /></svg>
                                                 </button>
-                                            )}
-                                            {/* --- INICIO DE LA CORRECCIÓN --- */}
+                                            </div>
                                             <div>
                                                 <label className={labelStyles}>Banco</label>
-                                                <input name="banco" value={account.banco} onChange={(e) => handleBankAccountChange(index, e)} className={inputStyles} placeholder="Ej: Banco de la Nación"/>
+                                                <Input name="banco" value={account.banco} onChange={(e) => handleBankAccountChange(index, e)} className="mt-1" placeholder="Ej: Banco de la Nación"/>
                                             </div>
                                             <div className="grid grid-cols-2 gap-4">
                                                 <div>
                                                     <label className={labelStyles}>Tipo de Cuenta</label>
                                                     {isBancoNacion ? (
-                                                        <input value="Cuenta Detracción" readOnly className={`${inputStyles} bg-gray-200 dark:bg-gray-800 cursor-not-allowed`} />
+                                                        <Input value="Cuenta Detracción" readOnly disabled className="mt-1" /> // Usar Input con disabled
                                                     ) : (
-                                                        <select name="tipo_cuenta" value={account.tipo_cuenta} onChange={(e) => handleBankAccountChange(index, e)} className={inputStyles}>
+                                                        <select name="tipo_cuenta" value={account.tipo_cuenta} onChange={(e) => handleBankAccountChange(index, e)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"> {/* Estilo Select */}
                                                             <option value="Cta Ahorro">Cta Ahorro</option>
                                                             <option value="Cta Corriente">Cta Corriente</option>
                                                         </select>
@@ -265,7 +345,7 @@ const ProfilePage = () => {
                                                 </div>
                                                 <div>
                                                     <label className={labelStyles}>Moneda</label>
-                                                    <select name="moneda" value={account.moneda} onChange={(e) => handleBankAccountChange(index, e)} className={inputStyles}>
+                                                    <select name="moneda" value={account.moneda} onChange={(e) => handleBankAccountChange(index, e)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"> {/* Estilo Select */}
                                                         <option value="Soles">Soles</option>
                                                         <option value="Dólares">Dólares</option>
                                                     </select>
@@ -273,13 +353,12 @@ const ProfilePage = () => {
                                             </div>
                                             <div>
                                                 <label className={labelStyles}>Número de Cuenta</label>
-                                                <input name="cuenta" value={account.cuenta} onChange={(e) => handleBankAccountChange(index, e)} className={inputStyles} placeholder="Ej: 00045115666"/>
+                                                <Input name="cuenta" value={account.cuenta} onChange={(e) => handleBankAccountChange(index, e)} className="mt-1" placeholder="Ej: 00045115666"/>
                                             </div>
                                             <div>
                                                 <label className={labelStyles}>CCI</label>
-                                                <input name="cci" value={account.cci} onChange={(e) => handleBankAccountChange(index, e)} className={inputStyles} placeholder="Ej: 01804500004511566655"/>
+                                                <Input name="cci" value={account.cci} onChange={(e) => handleBankAccountChange(index, e)} className="mt-1" placeholder="Ej: 01804500004511566655"/>
                                             </div>
-                                            {/* --- FIN DE LA CORRECCIÓN --- */}
                                         </div>
                                     )
                                 })}
@@ -290,7 +369,31 @@ const ProfilePage = () => {
                                 )}
                             </div>
                         </Card>
-                        
+
+                        {/* Credenciales de Facturación */}
+                        <Card>
+                            <div className="space-y-4">
+                                <div className="flex justify-between items-center border-b dark:border-gray-700 pb-2">
+                                    <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Credenciales de Facturación (Apis Perú)</h2>
+                                    <Button onClick={handleFetchCompanies} loading={loadingCompanies} variant="secondary" className="text-sm px-4 py-1">
+                                        Ver Empresas
+                                    </Button>
+                                </div>
+                                <p className="text-sm text-gray-500 dark:text-gray-400">
+                                    Estas credenciales se guardarán de forma segura y se usarán para emitir comprobantes electrónicos.
+                                </p>
+                                <div>
+                                    <label className={labelStyles}>Usuario o Email (Apis Perú)</label>
+                                    <Input name="apisperu_user" value={formData.apisperu_user} onChange={handleChange} className="mt-1" autoComplete="username" />
+                                </div>
+                                <div>
+                                    <label className={labelStyles}>Contraseña (Apis Perú)</label>
+                                    <Input type="password" name="apisperu_password" value={formData.apisperu_password} onChange={handleChange} className="mt-1" placeholder="Dejar en blanco para no cambiar" autoComplete="new-password" />
+                                </div>
+                            </div>
+                        </Card>
+
+                        {/* Botón Guardar */}
                         <div className="sticky bottom-0 py-4 bg-gray-50/80 dark:bg-gray-900/80 backdrop-blur-sm rounded-lg">
                             <div className="max-w-2xl mx-auto">
                                 <Button type="submit" loading={loadingProfile} className="w-full text-lg py-3">
@@ -300,21 +403,23 @@ const ProfilePage = () => {
                         </div>
                     </form>
 
+                    {/* Sección Logo */}
                     <Card>
                         <div className="space-y-6">
                             <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">Logo del Negocio</h2>
                             {user && user.logo_filename && (
                                 <div className="space-y-2">
                                     <label className={labelStyles}>Logo Actual</label>
-                                    <div className="p-4 border border-dashed rounded-md">
-                                        <img src={`${API_URL}/logos/${user.logo_filename}?t=${new Date().getTime()}`} alt="Logo del negocio" className="max-h-24 rounded-md"/>
+                                    <div className="p-4 border border-dashed rounded-md inline-block"> {/* Añadido inline-block */}
+                                        <img id="current-logo" src={`${API_URL}/logos/${user.logo_filename}?t=${new Date().getTime()}`} alt="Logo del negocio" className="max-h-24 rounded-md"/>
                                     </div>
                                 </div>
                             )}
                             <form onSubmit={handleLogoSubmit} className="space-y-4">
                                 <div>
                                     <label className={labelStyles}>{user && user.logo_filename ? 'Reemplazar logo' : 'Subir logo (PNG o JPG)'}</label>
-                                    <input type="file" onChange={handleFileChange} accept="image/png, image/jpeg" className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-gray-700 dark:file:text-gray-300 dark:hover:file:bg-gray-600" />
+                                    {/* Estilo para input file */}
+                                    <input type="file" onChange={handleFileChange} accept="image/png, image/jpeg" className="mt-1 block w-full text-sm text-gray-500 dark:text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 dark:file:bg-gray-700 file:text-blue-700 dark:file:text-gray-300 hover:file:bg-blue-100 dark:hover:file:bg-gray-600 cursor-pointer" />
                                 </div>
                                 <Button type="submit" variant="success" loading={loadingLogo} className="w-full">
                                     Subir Logo
