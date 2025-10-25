@@ -1,8 +1,10 @@
-// src/components/ProductsTable.jsx
+// frontend/src/components/ProductsTable.jsx
 import React from 'react';
+import Input from './Input'; // Importamos Input
+import Button from './Button'; // Importamos Button
 
 const ProductsTable = ({ products, handleProductChange, addProduct, removeProduct }) => {
-  const tableInputStyles = "w-full p-2 border border-transparent bg-gray-100 dark:bg-gray-900/50 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent sm:text-sm text-gray-800 dark:text-gray-200";
+  // Eliminamos tableInputStyles
 
   return (
     <div className="space-y-4 mt-8">
@@ -21,28 +23,71 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
           <tbody>
             {products.map((product, index) => (
               <tr key={index}>
-                {/* Se añade la clase 'uppercase' para la transformación visual */}
-                <td className="px-1"><input type="text" name="descripcion" value={product.descripcion} onChange={(e) => handleProductChange(index, e)} className={`${tableInputStyles} uppercase`} required /></td>
-                <td className="px-1"><input type="number" name="unidades" value={product.unidades} onChange={(e) => handleProductChange(index, e)} className={tableInputStyles} /></td>
-                <td className="px-1"><input type="number" step="0.01" name="precio_unitario" value={product.precio_unitario} onChange={(e) => handleProductChange(index, e)} className={tableInputStyles} /></td>
-                <td className="px-1"><input type="text" name="total" value={product.total.toFixed(2)} readOnly className={`${tableInputStyles} bg-gray-200 dark:bg-gray-800 cursor-not-allowed`} /></td>
+                {/* Usamos el componente Input */}
+                <td className="px-1">
+                  <Input
+                    type="text"
+                    name="descripcion"
+                    value={product.descripcion}
+                    onChange={(e) => handleProductChange(index, e)}
+                    className="uppercase" // Mantenemos clase específica
+                    required
+                  />
+                </td>
+                <td className="px-1">
+                  <Input
+                    type="number"
+                    name="unidades"
+                    value={product.unidades}
+                    onChange={(e) => handleProductChange(index, e)}
+                    min="1" // Añadir validación mínima si es apropiado
+                  />
+                </td>
+                <td className="px-1">
+                  <Input
+                    type="number"
+                    step="0.01"
+                    name="precio_unitario"
+                    value={product.precio_unitario}
+                    onChange={(e) => handleProductChange(index, e)}
+                    min="0" // Añadir validación mínima si es apropiado
+                  />
+                </td>
+                <td className="px-1">
+                  {/* El input de Total es de solo lectura, usamos Input con `readOnly` y `disabled` */}
+                  <Input
+                    type="text"
+                    name="total"
+                    value={product.total.toFixed(2)}
+                    readOnly
+                    disabled // Usamos disabled para darle estilo de deshabilitado
+                  />
+                </td>
                 <td className="px-1 text-center">
-                    <button type="button" onClick={() => removeProduct(index)} className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-semibold transition-transform duration-200 hover:scale-110">
+                    {/* Usamos Button para consistencia */}
+                    <Button
+                      type="button"
+                      onClick={() => removeProduct(index)}
+                      variant="danger" // Usamos variante danger
+                      className="px-3 py-1 text-sm font-semibold transition-transform duration-200 hover:scale-110" // Ajustamos estilos
+                    >
                         Eliminar
-                    </button>
+                    </Button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <button 
-        type="button" 
-        onClick={addProduct} 
-        className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:scale-95"
+      {/* Botón de Agregar Producto (sin cambios en estructura) */}
+      <Button
+        type="button"
+        onClick={addProduct}
+        variant="success" // Cambiamos a variante success
+        className="w-full py-3" // Ajustamos padding
       >
         + Agregar Producto
-      </button>
+      </Button>
     </div>
   );
 };

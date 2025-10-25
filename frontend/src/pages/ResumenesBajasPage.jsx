@@ -5,6 +5,7 @@ import PageHeader from '../components/PageHeader';
 import Card from '../components/Card';
 import Button from '../components/Button';
 import LoadingSpinner from '../components/LoadingSpinner';
+import Input from '../components/Input'; // Importamos Input
 import { AuthContext } from '../context/AuthContext';
 import { ToastContext } from '../context/ToastContext';
 import { API_URL } from '../config';
@@ -17,6 +18,7 @@ const TabResumenDiario = () => {
     const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
     const [loading, setLoading] = useState(false);
 
+    // handleSubmit (sin cambios)
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
@@ -47,12 +49,13 @@ const TabResumenDiario = () => {
             <form onSubmit={handleSubmit} className="flex items-end gap-4">
                 <div>
                     <label htmlFor="fecha-resumen" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha del Resumen</label>
-                    <input
+                    {/* Usamos el componente Input */}
+                    <Input
                         type="date"
                         id="fecha-resumen"
                         value={fecha}
                         onChange={(e) => setFecha(e.target.value)}
-                        className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200"
+                        className="mt-1"
                         required
                     />
                 </div>
@@ -74,7 +77,8 @@ const TabComunicacionBaja = () => {
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
 
-    useEffect(() => {
+    // useEffect para buscar facturas (sin cambios)
+     useEffect(() => {
         const fetchFacturas = async () => {
             setLoading(true);
             try {
@@ -83,7 +87,6 @@ const TabComunicacionBaja = () => {
                 });
                 if (!response.ok) throw new Error('No se pudieron cargar las facturas.');
                 const data = await response.json();
-                // Filtramos las facturas que ya han sido anuladas
                 const facturasActivas = data.filter(f => f.success && !f.notas_afectadas.some(n => n.success && n.cod_motivo === '01'));
                 setFacturas(facturasActivas);
             } catch (err) {
@@ -94,13 +97,15 @@ const TabComunicacionBaja = () => {
         };
         fetchFacturas();
     }, [token, addToast]);
-    
+
+    // handleSelect (sin cambios)
     const handleSelect = (id) => {
-        setSelected(prev => 
+        setSelected(prev =>
             prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
         );
     };
 
+    // handleSubmit (sin cambios)
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (selected.length === 0 || !motivo.trim()) {
@@ -126,12 +131,15 @@ const TabComunicacionBaja = () => {
             addToast(`Comunicación de Baja con ticket ${data.ticket} enviada.`, 'success');
             setSelected([]);
             setMotivo('');
+            // Podrías forzar la recarga de facturas aquí si lo deseas
+            // fetchFacturas();
         } catch(err) {
             addToast(err.message, 'error');
         } finally {
             setSubmitting(false);
         }
     };
+
 
     return (
         <div className="space-y-6">
@@ -142,18 +150,35 @@ const TabComunicacionBaja = () => {
             {loading ? <LoadingSpinner /> : (
                  <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="max-h-60 overflow-y-auto border rounded-md p-2 dark:border-gray-600 space-y-2">
+                        {facturas.length === 0 && <p className="text-center text-gray-500 py-4">No hay facturas activas para dar de baja.</p>}
                         {facturas.map(factura => (
                             <div key={factura.id} className="flex items-center p-2 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700">
-                                <input type="checkbox" id={`factura-${factura.id}`} checked={selected.includes(factura.id)} onChange={() => handleSelect(factura.id)} className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"/>
+                                {/* Usamos el componente Input para el checkbox */}
+                                <Input
+                                    type="checkbox"
+                                    id={`factura-${factura.id}`}
+                                    checked={selected.includes(factura.id)}
+                                    onChange={() => handleSelect(factura.id)}
+                                    // Quitamos estilos base y aplicamos los específicos para checkbox
+                                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 p-0 shadow-none border"
+                                />
                                 <label htmlFor={`factura-${factura.id}`} className="ml-3 block text-sm font-medium text-gray-700 dark:text-gray-200">
-                                    {factura.serie}-{factura.correlativo} - {factura.payload_enviado.client.rznSocial} (S/ {factura.payload_enviado.mtoImpVenta.toFixed(2)})
+                                    {factura.serie}-{factura.correlativo} - {factura.payload_enviado?.client?.rznSocial || 'Cliente no disponible'} (S/ {factura.payload_enviado?.mtoImpVenta?.toFixed(2) || '0.00'})
                                 </label>
                             </div>
                         ))}
                     </div>
                      <div>
                          <label htmlFor="motivo-baja" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Motivo de la Baja</label>
-                         <input type="text" id="motivo-baja" value={motivo} onChange={(e) => setMotivo(e.target.value)} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm sm:text-sm dark:bg-gray-700 dark:border-gray-600" required/>
+                         {/* Usamos el componente Input */}
+                         <Input
+                           type="text"
+                           id="motivo-baja"
+                           value={motivo}
+                           onChange={(e) => setMotivo(e.target.value)}
+                           className="mt-1"
+                           required
+                         />
                      </div>
                      <div className="text-right">
                         <Button type="submit" loading={submitting} disabled={selected.length === 0 || !motivo.trim()}>
@@ -166,6 +191,7 @@ const TabComunicacionBaja = () => {
     );
 };
 
+// Componente principal ResumenesBajasPage (sin cambios)
 const ResumenesBajasPage = () => {
     const [activeTab, setActiveTab] = useState('resumen');
 

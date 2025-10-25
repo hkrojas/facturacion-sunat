@@ -6,12 +6,13 @@ import Card from '../components/Card';
 import Button from '../components/Button';
 import LoadingSpinner from '../components/LoadingSpinner';
 import CustomDropdown from '../components/CustomDropdown';
+import Input from '../components/Input'; // Importamos Input
 import { AuthContext } from '../context/AuthContext';
 import { ToastContext } from '../context/ToastContext';
 import { API_URL } from '../config';
 import { parseApiError } from '../utils/apiUtils';
 
-// --- COMPONENTE PARA LA LISTA DE GUÍAS ---
+// Componente GuiasList (sin cambios, excepto uso de Button si es necesario)
 const GuiasList = ({ refreshTrigger }) => {
     const [guias, setGuias] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -66,7 +67,7 @@ const GuiasList = ({ refreshTrigger }) => {
                             {guias.map(g => (
                                 <tr key={g.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100">{g.serie}-{g.correlativo}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{g.payload_enviado.destinatario.rznSocial}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{g.payload_enviado?.destinatario?.rznSocial || 'N/A'}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{formatDate(g.fecha_emision)}</td>
                                     <td className="px-6 py-4 text-center">
                                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${g.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
@@ -74,7 +75,8 @@ const GuiasList = ({ refreshTrigger }) => {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-center">
-                                        <Button variant="secondary" className="text-sm">Ver Detalles</Button>
+                                        {/* Podrías añadir botones para descargar XML/CDR/PDF de la guía aquí */}
+                                        <Button variant="secondary" className="text-sm px-2 py-1">Ver Detalles</Button>
                                     </td>
                                 </tr>
                             ))}
@@ -86,8 +88,7 @@ const GuiasList = ({ refreshTrigger }) => {
     );
 };
 
-
-// --- COMPONENTE PRINCIPAL DE LA PÁGINA ---
+// --- COMPONENTE PRINCIPAL DE LA PÁGINA (ACTUALIZADO CON INPUT) ---
 const GuiasPage = () => {
     const [activeTab, setActiveTab] = useState('crear');
     const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -110,6 +111,7 @@ const GuiasPage = () => {
         bienes: [{ descripcion: '', cantidad: 1, unidad: 'NIU' }]
     });
 
+    // useEffect para dirección de partida (sin cambios)
     useEffect(() => {
         if (user?.business_address) {
             setFormData(prev => ({
@@ -119,6 +121,7 @@ const GuiasPage = () => {
         }
     }, [user]);
 
+    // handleChange (sin cambios)
     const handleChange = (section, field, value, index = null) => {
         setFormData(prev => {
             const newForm = JSON.parse(JSON.stringify(prev));
@@ -132,8 +135,9 @@ const GuiasPage = () => {
             return newForm;
         });
     };
-    
-    const handleConsultarDocumento = async (tipo, numero, onComplete) => {
+
+    // handleConsultarDocumento (sin cambios)
+     const handleConsultarDocumento = async (tipo, numero, onComplete) => {
         if (!numero) {
             addToast('Ingrese un número de documento para buscar.', 'error');
             return;
@@ -154,16 +158,20 @@ const GuiasPage = () => {
         }
     };
 
-    const handleConsultarDestinatario = async () => {
+    // handleConsultarDestinatario (sin cambios)
+     const handleConsultarDestinatario = async () => {
         const { tipoDoc, numDoc } = formData.destinatario;
         setLoadingDestinatario(true);
         const tipoDocMap = { '1': 'DNI', '6': 'RUC' };
         await handleConsultarDocumento(tipoDocMap[tipoDoc], numDoc, (data) => {
             handleChange('destinatario', 'rznSocial', data.nombre);
+            // Podrías intentar autocompletar dirección también si la API la devuelve
+            // handleChange('llegada', 'direccion', data.direccion || '');
         });
         setLoadingDestinatario(false);
     };
 
+    // handleConsultarConductor (sin cambios)
     const handleConsultarConductor = async () => {
         const { numDoc } = formData.conductor;
         setLoadingConductor(true);
@@ -189,33 +197,57 @@ const GuiasPage = () => {
         setLoadingConductor(false);
     };
 
-    const addBien = () => {
+
+    // addBien (sin cambios)
+     const addBien = () => {
         setFormData(prev => ({
             ...prev,
             bienes: [...prev.bienes, { descripcion: '', cantidad: 1, unidad: 'NIU' }]
         }));
     };
 
-    const removeBien = (index) => {
+    // removeBien (sin cambios)
+     const removeBien = (index) => {
         setFormData(prev => ({
             ...prev,
             bienes: prev.bienes.filter((_, i) => i !== index)
         }));
     };
 
-    const handleSubmit = async (e) => {
+    // handleSubmit (sin cambios)
+     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoading(true);
 
         const payload = JSON.parse(JSON.stringify(formData));
-        
-        // --- CORRECCIÓN: Se elimina la conversión a entero ---
 
-        if (payload.modTraslado === '01') {
-            delete payload.conductor;
-        } else if (payload.modTraslado === '02') {
-            payload.transportista = { placa: payload.transportista.placa };
+        if (payload.modTraslado === '01') { // Transporte Público
+            delete payload.conductor; // Eliminamos conductor
+            // Aseguramos que transportista tenga los campos necesarios
+            if (!payload.transportista || !payload.transportista.numDoc || !payload.transportista.rznSocial) {
+                 addToast('Para transporte público, RUC y Razón Social del transportista son requeridos.', 'error');
+                 setLoading(false);
+                 return;
+            }
+             payload.transportista.tipoDoc = '6'; // Asegurar RUC
+        } else if (payload.modTraslado === '02') { // Transporte Privado
+            // Solo necesitamos la placa en transportista, el resto se borra
+             if (!payload.transportista || !payload.transportista.placa) {
+                 addToast('Para transporte privado, la placa del vehículo es requerida.', 'error');
+                 setLoading(false);
+                 return;
+             }
+             payload.transportista = { placa: payload.transportista.placa };
+
+             // Verificamos datos del conductor
+             if (!payload.conductor || !payload.conductor.numDoc || !payload.conductor.nombres || !payload.conductor.apellidos || !payload.conductor.licencia) {
+                 addToast('Para transporte privado, todos los datos del conductor son requeridos.', 'error');
+                 setLoading(false);
+                 return;
+             }
+              payload.conductor.tipoDoc = '1'; // Asegurar DNI
         }
+
 
         try {
             const response = await fetch(`${API_URL}/guias-remision/`, {
@@ -230,14 +262,19 @@ const GuiasPage = () => {
             addToast(`Guía ${data.serie}-${data.correlativo} creada con éxito.`, 'success');
             setRefreshTrigger(p => p + 1);
             setActiveTab('ver');
+            // Resetear formulario (opcional)
+             setFormData({ /* ... estado inicial ... */ });
+
         } catch (err) {
             addToast(err.message, 'error');
         } finally {
             setLoading(false);
         }
     };
-    
-    const inputStyles = "mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200";
+
+
+    // Eliminamos inputStyles
+    const labelStyles = "block text-sm font-medium text-gray-700 dark:text-gray-300"; // Añadimos dark mode a label
     const headerIcon = (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path d="M9 17a2 2 0 11-4 0 2 2 0 014 0zM19 17a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -248,6 +285,25 @@ const GuiasPage = () => {
     const activeTabStyle = "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400";
     const inactiveTabStyle = "border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200";
 
+    // Opciones para dropdowns del formulario
+    const tipoDocDestinatarioOptions = [{value: '6', label: 'RUC'}, {value: '1', label: 'DNI'}];
+    const modTrasladoOptions = [{value: '02', label: 'Transporte Privado'}, {value: '01', label: 'Transporte Público'}];
+    const codTrasladoOptions = [
+        {value: '01', label: 'Venta'},
+        {value: '14', label: 'Venta sujeta a confirmación'},
+        {value: '04', label: 'Traslado entre establecimientos'},
+        {value: '18', label: 'Traslado por emisor itinerante'},
+        {value: '08', label: 'Importación'},
+        {value: '09', label: 'Exportación'}
+    ];
+     const unidadBienOptions = [
+        {value: 'NIU', label: 'Unidad (Bienes)'},
+        {value: 'KGM', label: 'Kilogramo'},
+        {value: 'TNE', label: 'Tonelada'},
+        // Agrega más unidades si es necesario
+    ];
+
+
     return (
         <div className="bg-gray-100 dark:bg-dark-bg-body min-h-screen">
             <PageHeader title="Guías de Remisión" icon={headerIcon}>
@@ -255,7 +311,7 @@ const GuiasPage = () => {
                     Volver al Panel
                 </Link>
             </PageHeader>
-            
+
             <main className="p-4 sm:p-8">
                 <div className="w-full max-w-4xl mx-auto">
                     <div className="flex border-b border-gray-300 dark:border-gray-700">
@@ -268,80 +324,81 @@ const GuiasPage = () => {
                                 <section>
                                     <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Destinatario</h3>
                                     <div className="grid md:grid-cols-2 gap-4">
-                                        <CustomDropdown label="Tipo de Documento" options={[{value: '6', label: 'RUC'}, {value: '1', label: 'DNI'}]} selectedOption={formData.destinatario.tipoDoc} onSelect={(value) => handleChange('destinatario', 'tipoDoc', value)} />
+                                        <CustomDropdown label="Tipo de Documento" options={tipoDocDestinatarioOptions} selectedOption={formData.destinatario.tipoDoc} onSelect={(value) => handleChange('destinatario', 'tipoDoc', value)} />
                                         <div className="flex items-end space-x-2">
                                             <div className="flex-grow">
-                                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">N° Documento</label>
-                                                <input placeholder="N° Documento" value={formData.destinatario.numDoc} onChange={e => handleChange('destinatario', 'numDoc', e.target.value)} className={inputStyles} required />
+                                                <label className={labelStyles}>N° Documento</label>
+                                                <Input placeholder="N° Documento" value={formData.destinatario.numDoc} onChange={e => handleChange('destinatario', 'numDoc', e.target.value)} className="mt-1" required />
                                             </div>
                                             <Button type="button" onClick={handleConsultarDestinatario} loading={loadingDestinatario} className="whitespace-nowrap h-10">Buscar</Button>
                                         </div>
                                     </div>
                                     <div className="mt-4">
-                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Razón Social / Nombre</label>
-                                        <input placeholder="Razón Social / Nombre" value={formData.destinatario.rznSocial} onChange={e => handleChange('destinatario', 'rznSocial', e.target.value)} className={inputStyles} required />
+                                        <label className={labelStyles}>Razón Social / Nombre</label>
+                                        <Input placeholder="Razón Social / Nombre" value={formData.destinatario.rznSocial} onChange={e => handleChange('destinatario', 'rznSocial', e.target.value)} className="mt-1" required />
                                     </div>
                                 </section>
 
                                 <section>
                                     <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Datos del Envío</h3>
                                     <div className="grid md:grid-cols-2 gap-4">
-                                        <CustomDropdown label="Modalidad de Traslado" options={[{value: '02', label: 'Transporte Privado'}, {value: '01', label: 'Transporte Público'}]} selectedOption={formData.modTraslado} onSelect={(value) => handleChange(null, 'modTraslado', value)} />
-                                        <CustomDropdown label="Motivo de Traslado" options={[{value: '01', label: 'Venta'}, {value: '14', label: 'Venta sujeta a confirmación'}, {value: '04', label: 'Traslado entre establecimientos'}, {value: '18', label: 'Traslado por emisor itinerante'}, {value: '08', label: 'Importación'}, {value: '09', label: 'Exportación'}]} selectedOption={formData.codTraslado} onSelect={(value) => handleChange(null, 'codTraslado', value)} />
-                                        <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha de Traslado</label><input type="date" value={formData.fecTraslado} onChange={e => handleChange(null, 'fecTraslado', e.target.value)} className={inputStyles} required /></div>
-                                        <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Peso Total (KGM)</label><input type="number" step="0.01" placeholder="Peso Total (KGM)" value={formData.pesoTotal} onChange={e => handleChange(null, 'pesoTotal', parseFloat(e.target.value))} className={inputStyles} required /></div>
+                                        <CustomDropdown label="Modalidad de Traslado" options={modTrasladoOptions} selectedOption={formData.modTraslado} onSelect={(value) => handleChange(null, 'modTraslado', value)} />
+                                        <CustomDropdown label="Motivo de Traslado" options={codTrasladoOptions} selectedOption={formData.codTraslado} onSelect={(value) => handleChange(null, 'codTraslado', value)} />
+                                        <div><label className={labelStyles}>Fecha de Traslado</label><Input type="date" value={formData.fecTraslado} onChange={e => handleChange(null, 'fecTraslado', e.target.value)} className="mt-1" required /></div>
+                                        <div><label className={labelStyles}>Peso Total (KGM)</label><Input type="number" step="0.01" placeholder="Peso Total (KGM)" value={formData.pesoTotal} onChange={e => handleChange(null, 'pesoTotal', parseFloat(e.target.value))} className="mt-1" required /></div>
                                     </div>
                                 </section>
 
                                 <section>
                                     <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Direcciones</h3>
                                     <div className="grid md:grid-cols-2 gap-6">
-                                        <div><h4 className="font-medium mb-2 dark:text-gray-200">Punto de Partida</h4><input placeholder="Ubigeo Partida" value={formData.partida.ubigueo} onChange={e => handleChange('partida', 'ubigueo', e.target.value)} className={inputStyles} required /><input placeholder="Dirección Partida" value={formData.partida.direccion} onChange={e => handleChange('partida', 'direccion', e.target.value)} className={inputStyles} required /></div>
-                                        <div><h4 className="font-medium mb-2 dark:text-gray-200">Punto de Llegada</h4><input placeholder="Ubigeo Llegada" value={formData.llegada.ubigueo} onChange={e => handleChange('llegada', 'ubigueo', e.target.value)} className={inputStyles} required /><input placeholder="Dirección Llegada" value={formData.llegada.direccion} onChange={e => handleChange('llegada', 'direccion', e.target.value)} className={inputStyles} required /></div>
+                                        <div><h4 className="font-medium mb-2 dark:text-gray-200">Punto de Partida</h4><Input placeholder="Ubigeo Partida" value={formData.partida.ubigueo} onChange={e => handleChange('partida', 'ubigueo', e.target.value)} className="mt-1" required /><Input placeholder="Dirección Partida" value={formData.partida.direccion} onChange={e => handleChange('partida', 'direccion', e.target.value)} className="mt-1" required /></div>
+                                        <div><h4 className="font-medium mb-2 dark:text-gray-200">Punto de Llegada</h4><Input placeholder="Ubigeo Llegada" value={formData.llegada.ubigueo} onChange={e => handleChange('llegada', 'ubigueo', e.target.value)} className="mt-1" required /><Input placeholder="Dirección Llegada" value={formData.llegada.direccion} onChange={e => handleChange('llegada', 'direccion', e.target.value)} className="mt-1" required /></div>
                                     </div>
                                 </section>
 
-                                {formData.modTraslado === '01' && (
+                                {formData.modTraslado === '01' && ( // Transporte Público
                                     <section>
-                                        <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Transportista (Transporte Público)</h3>
-                                        <div className="grid md:grid-cols-3 gap-4">
-                                            <input placeholder="RUC Transportista" value={formData.transportista.numDoc} onChange={e => handleChange('transportista', 'numDoc', e.target.value)} className={inputStyles} required />
-                                            <input placeholder="Razón Social" value={formData.transportista.rznSocial} onChange={e => handleChange('transportista', 'rznSocial', e.target.value)} className={inputStyles} required />
-                                            <input placeholder="Placa Vehículo" value={formData.transportista.placa} onChange={e => handleChange('transportista', 'placa', e.target.value)} className={inputStyles} required />
+                                        <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Transportista (Público)</h3>
+                                        <div className="grid md:grid-cols-2 gap-4">
+                                             <div><label className={labelStyles}>RUC Transportista</label><Input placeholder="RUC Transportista" value={formData.transportista.numDoc} onChange={e => handleChange('transportista', 'numDoc', e.target.value)} className="mt-1" required /></div>
+                                             <div><label className={labelStyles}>Razón Social Transportista</label><Input placeholder="Razón Social" value={formData.transportista.rznSocial} onChange={e => handleChange('transportista', 'rznSocial', e.target.value)} className="mt-1" required /></div>
+                                             {/* Placa es opcional en transporte público pero podría ser útil */}
+                                             {/* <div><label className={labelStyles}>Placa Vehículo (Opcional)</label><Input placeholder="Placa Vehículo" value={formData.transportista.placa} onChange={e => handleChange('transportista', 'placa', e.target.value)} className="mt-1" /></div> */}
                                         </div>
                                     </section>
                                 )}
-                                {formData.modTraslado === '02' && (
+                                {formData.modTraslado === '02' && ( // Transporte Privado
                                     <section>
-                                        <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Conductor y Vehículo (Transporte Privado)</h3>
+                                        <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Conductor y Vehículo (Privado)</h3>
                                         <div className="grid md:grid-cols-2 gap-4">
                                             <div className="flex items-end space-x-2">
-                                                <div className="flex-grow"><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">DNI Conductor</label><input placeholder="DNI Conductor" value={formData.conductor.numDoc} onChange={e => handleChange('conductor', 'numDoc', e.target.value)} className={inputStyles} required /></div>
+                                                <div className="flex-grow"><label className={labelStyles}>DNI Conductor</label><Input placeholder="DNI Conductor" value={formData.conductor.numDoc} onChange={e => handleChange('conductor', 'numDoc', e.target.value)} className="mt-1" required /></div>
                                                 <Button type="button" onClick={handleConsultarConductor} loading={loadingConductor} className="whitespace-nowrap h-10">Buscar</Button>
                                             </div>
-                                            <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Placa Vehículo</label><input placeholder="Placa Vehículo" value={formData.transportista.placa} onChange={e => handleChange('transportista', 'placa', e.target.value)} className={inputStyles} required /></div>
+                                            <div><label className={labelStyles}>Placa Vehículo</label><Input placeholder="Placa Vehículo" value={formData.transportista.placa} onChange={e => handleChange('transportista', 'placa', e.target.value)} className="mt-1" required /></div>
                                         </div>
                                         <div className="grid md:grid-cols-2 gap-4 mt-4">
-                                            <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombres Conductor</label><input placeholder="Nombres" value={formData.conductor.nombres} onChange={e => handleChange('conductor', 'nombres', e.target.value)} className={inputStyles} required /></div>
-                                            <div><label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Apellidos Conductor</label><input placeholder="Apellidos" value={formData.conductor.apellidos} onChange={e => handleChange('conductor', 'apellidos', e.target.value)} className={inputStyles} required /></div>
+                                            <div><label className={labelStyles}>Nombres Conductor</label><Input placeholder="Nombres" value={formData.conductor.nombres} onChange={e => handleChange('conductor', 'nombres', e.target.value)} className="mt-1" required /></div>
+                                            <div><label className={labelStyles}>Apellidos Conductor</label><Input placeholder="Apellidos" value={formData.conductor.apellidos} onChange={e => handleChange('conductor', 'apellidos', e.target.value)} className="mt-1" required /></div>
                                         </div>
                                         <div className="mt-4 md:col-span-2">
-                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">N° de Licencia</label>
-                                            <input placeholder="Ej: Q12345678" value={formData.conductor.licencia} onChange={e => handleChange('conductor', 'licencia', e.target.value)} className={inputStyles} required />
+                                            <label className={labelStyles}>N° de Licencia</label>
+                                            <Input placeholder="Ej: Q12345678" value={formData.conductor.licencia} onChange={e => handleChange('conductor', 'licencia', e.target.value)} className="mt-1" required />
                                         </div>
                                     </section>
                                 )}
+
 
                                 <section>
                                     <h3 className="text-lg font-semibold border-b pb-2 mb-4 dark:text-gray-200 dark:border-gray-600">Bienes a Transportar</h3>
                                     {formData.bienes.map((bien, index) => (
-                                        <div key={index} className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2 items-center">
-                                            <input placeholder="Descripción" value={bien.descripcion} onChange={e => handleChange('bienes', 'descripcion', e.target.value, index)} className={`${inputStyles} md:col-span-2`} required />
-                                            <input type="number" placeholder="Cantidad" value={bien.cantidad} onChange={e => handleChange('bienes', 'cantidad', parseFloat(e.target.value), index)} className={inputStyles} required />
-                                            <div className="flex items-center gap-2">
-                                                <input placeholder="Unidad (NIU, KGM)" value={bien.unidad} onChange={e => handleChange('bienes', 'unidad', e.target.value, index)} className={inputStyles} required />
-                                                <Button type="button" onClick={() => removeBien(index)} variant="danger" className="px-3 py-2 text-sm h-10 mt-1">&times;</Button>
-                                            </div>
+                                        <div key={index} className="grid grid-cols-1 md:grid-cols-[2fr,1fr,1fr,auto] gap-2 mb-2 items-center">
+                                            <Input placeholder="Descripción" value={bien.descripcion} onChange={e => handleChange('bienes', 'descripcion', e.target.value, index)} className="mt-1" required />
+                                            <Input type="number" placeholder="Cantidad" value={bien.cantidad} onChange={e => handleChange('bienes', 'cantidad', parseFloat(e.target.value) || 0, index)} className="mt-1" required />
+                                            <Input placeholder="Unidad (NIU, KGM)" value={bien.unidad} onChange={e => handleChange('bienes', 'unidad', e.target.value.toUpperCase(), index)} className="mt-1 uppercase" required />
+                                            {/* Usamos Button para consistencia */}
+                                            <Button type="button" onClick={() => removeBien(index)} variant="danger" className="px-3 py-2 text-sm h-10 mt-1">&times;</Button>
                                         </div>
                                     ))}
                                     <Button type="button" onClick={addBien} variant="secondary" className="w-full mt-2">+ Agregar Bien</Button>

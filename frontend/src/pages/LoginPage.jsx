@@ -5,25 +5,27 @@ import { useNavigate, Link } from 'react-router-dom';
 import AuthLayout from '../components/AuthLayout';
 import UserIcon from '../components/UserIcon';
 import LockIcon from '../components/LockIcon';
+import Input from '../components/Input'; // Importamos Input
 import { ToastContext } from '../context/ToastContext';
 import { API_URL } from '../config';
-import Button from '../components/Button'; // Importamos el componente Button
+import Button from '../components/Button';
 
 const LoginPage = () => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
-    const [loading, setLoading] = useState(false); // Estado de carga para el botón
+    const [loading, setLoading] = useState(false);
     const { login } = useContext(AuthContext);
     const { addToast } = useContext(ToastContext);
     const navigate = useNavigate();
     const [deactivationError, setDeactivationError] = useState(null);
 
+    // handleSubmit (sin cambios)
     const handleSubmit = async (e) => {
-        e.preventDefault(); 
-        setLoading(true); // Activamos el estado de carga
+        e.preventDefault();
+        setLoading(true);
         setDeactivationError(null);
-        
+
         const formData = new URLSearchParams();
         formData.append('username', email);
         formData.append('password', password);
@@ -33,7 +35,7 @@ const LoginPage = () => {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: formData,
             });
-            
+
             const data = await response.json();
 
             if (!response.ok) {
@@ -54,7 +56,7 @@ const LoginPage = () => {
                 addToast(err.message, 'error');
             }
         } finally {
-            setLoading(false); // Desactivamos el estado de carga
+            setLoading(false);
         }
     };
 
@@ -62,33 +64,38 @@ const LoginPage = () => {
         <>
             <AuthLayout title="Iniciar Sesión">
                 <form onSubmit={handleSubmit} className="space-y-6" action="/token" method="post">
+                    {/* Usamos el componente Input */}
                     <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4">
                         <UserIcon />
-                        <input 
+                        <Input
                             id="email"
-                            name="username" 
-                            type="email" 
+                            name="username"
+                            type="email"
                             autoComplete="username"
-                            value={email} 
-                            onChange={(e) => setEmail(e.target.value)} 
-                            required 
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
                             placeholder="Ingrese su email"
-                            className="bg-transparent border-none outline-none w-full text-gray-800 dark:text-gray-200"
+                            // Estilos específicos
+                            className="bg-transparent border-none outline-none focus:ring-0 p-0 flex-grow"
                         />
                     </div>
+                    {/* Usamos el componente Input */}
                     <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4">
                         <LockIcon />
-                        <input 
+                        <Input
                             id="password"
                             name="password"
                             type={showPassword ? 'text' : 'password'}
                             autoComplete="current-password"
-                            value={password} 
-                            onChange={(e) => setPassword(e.target.value)} 
-                            required 
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
                             placeholder="Ingrese su contraseña"
-                            className="bg-transparent border-none outline-none w-full text-gray-800 dark:text-gray-200"
+                            // Estilos específicos
+                            className="bg-transparent border-none outline-none focus:ring-0 p-0 flex-grow"
                         />
+                        {/* Botón mostrar/ocultar (sin cambios) */}
                         <button type="button" onClick={() => setShowPassword(!showPassword)} className="focus:outline-none">
                           {showPassword ? (
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 dark:hover:text-blue-300" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.73 6.957 5.475 4.5 10 4.5s8.27 2.457 9.542 5.5c-1.272 3.043-5.068 5.5-9.542 5.5S1.73 13.043.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
@@ -97,22 +104,26 @@ const LoginPage = () => {
                             )}
                         </button>
                     </div>
-                    <Button 
-                        type="submit" 
+                    {/* Botón de envío (sin cambios) */}
+                    <Button
+                        type="submit"
                         className="w-full text-lg py-3"
                         loading={loading}
                     >
                         Iniciar sesión
                     </Button>
                 </form>
+                {/* Enlace a Registro (sin cambios) */}
                 <p className="text-center mt-4 text-sm text-gray-700 dark:text-gray-300">
                     ¿No tienes una cuenta? <Link to="/register" className="text-blue-600 hover:underline font-semibold">Regístrate aquí</Link>
                 </p>
             </AuthLayout>
 
+            {/* Modal de error de desactivación (sin cambios) */}
             {deactivationError && (
                 <div className="fixed inset-0 bg-red-900 bg-opacity-80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-                    <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-md text-center transform transition-all animate-slide-in-up">
+                   {/* ... contenido del modal ... */}
+                   <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-md text-center transform transition-all animate-slide-in-up">
                         <div className="mx-auto flex-shrink-0 flex items-center justify-center h-16 w-16 rounded-full bg-red-100 dark:bg-red-900/50 mb-6">
                             <svg className="h-10 w-10 text-red-600 dark:text-red-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
