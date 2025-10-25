@@ -10,6 +10,14 @@ import NotaModal from './NotaModal';
 import Input from './Input'; // Importar Input para la búsqueda
 import { API_URL } from '../config';
 import { parseApiError } from '../utils/apiUtils'; // Importar parseApiError
+// Importar iconos de Heroicons
+import {
+    EyeIcon,
+    XMarkIcon,
+    CheckCircleIcon,
+    MagnifyingGlassIcon,
+    DocumentTextIcon
+} from '@heroicons/react/24/outline';
 
 // ComprobanteDetailsModal (sin cambios funcionales, solo se usa aquí)
 const ComprobanteDetailsModal = ({ comprobante, onClose, token, onEmitirNota }) => {
@@ -65,7 +73,7 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token, onEmitirNota }) 
                 <div className="flex justify-between items-center mb-4">
                     <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200">Detalles del Comprobante</h2>
                     <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                        <XMarkIcon className="h-6 w-6" />
                     </button>
                 </div>
                 <p className="text-lg text-blue-600 dark:text-blue-400 font-semibold mb-6 border-b dark:border-gray-700 pb-4">{comprobante.serie}-{comprobante.correlativo}</p>
@@ -77,7 +85,10 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token, onEmitirNota }) 
                             <div className="space-y-4 rounded-lg bg-gray-50 dark:bg-gray-700/50 p-4">
                                 <DetailItem label="Estado">
                                     <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${comprobante.success ? 'bg-green-100 text-green-800 dark:bg-green-800/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-800/50 dark:text-red-300'}`}>
-                                        <svg className={`-ml-0.5 mr-1.5 h-4 w-4 ${comprobante.success ? 'text-green-500' : 'text-red-500'}`} fill="currentColor" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" /></svg>
+                                        {comprobante.success
+                                            ? <CheckCircleIcon className="-ml-0.5 mr-1.5 h-4 w-4 text-green-500" />
+                                            : <XMarkIcon className="-ml-0.5 mr-1.5 h-4 w-4 text-red-500" />
+                                        }
                                         {comprobante.success ? 'Aceptado' : 'Rechazado'}
                                     </span>
                                 </DetailItem>
@@ -111,7 +122,7 @@ const ComprobanteDetailsModal = ({ comprobante, onClose, token, onEmitirNota }) 
 
 
 const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
-    // Estados y lógica (sin cambios funcionales)
+    // Estados y lógica
     const [comprobantes, setComprobantes] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -120,8 +131,6 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
     const { addToast } = useContext(ToastContext); // Añadir addToast
     const [viewingComprobante, setViewingComprobante] = useState(null);
     const [creatingNotaFor, setCreatingNotaFor] = useState(null);
-
-    const EyeIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.73 6.957 5.475 4.5 10 4.5s8.27 2.457 9.542 5.5c-1.272 3.043-5.068 5.5-9.542 5.5S1.73 13.043.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>;
 
     // fetchComprobantes completo
     const fetchComprobantes = async () => {
@@ -140,7 +149,10 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
             }
             const data = await response.json();
             setComprobantes(data);
-        } catch (err) { setError(err.message); }
+        } catch (err) { 
+            setError(err.message); 
+            addToast(err.message, 'error'); // Añadir toast en el error
+        }
         finally { setLoading(false); }
     };
 
@@ -164,7 +176,20 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
     );
 
     if (loading) return <LoadingSpinner message="Cargando comprobantes..." />;
-    if (error) return <p className="text-center text-red-500 mt-8">Error: {error}</p>;
+    
+    // CORRECCIÓN: Mostrar error si existe
+    if (error) {
+        return (
+            <div className="text-center text-red-600 dark:text-red-400 mt-8 p-4 border border-red-300 dark:border-red-700 rounded-md bg-red-50 dark:bg-red-900/30">
+                <ExclamationTriangleIcon className="h-10 w-10 mx-auto mb-2 text-red-500" />
+                <p className="font-semibold">Ocurrió un error al cargar los comprobantes:</p>
+                <p className="text-sm">{error}</p>
+                 <Button onClick={fetchComprobantes} variant="secondary" className="mt-4 text-sm">
+                    Reintentar
+                 </Button>
+            </div>
+        );
+    }
 
     return (
         <>
@@ -202,14 +227,14 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
                             className="pl-10 pr-4 py-2 w-full !rounded-full !border-gray-300 dark:!border-gray-600 focus:!ring-blue-500"
                         />
                          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg className="w-5 h-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                            <MagnifyingGlassIcon className="w-5 h-5 text-gray-400" />
                         </div>
                     </div>
                 </div>
 
                 {filteredComprobantes.length === 0 ? (
                     <div className="text-center text-gray-500 dark:text-gray-400 py-12">
-                         <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                         <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
                         <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">{searchTerm ? 'No se encontraron resultados' : 'Sin Comprobantes'}</h3>
                         <p className="mt-1 text-sm text-gray-500">{searchTerm ? 'Intenta con otra búsqueda.' : `No has emitido ${tipoDoc === '01' ? 'facturas' : 'boletas'} aún.`}</p>
                     </div>
@@ -267,7 +292,7 @@ const ComprobantesList = ({ tipoDoc, refreshTrigger, onNotaCreada }) => {
                                                     onClick={() => setViewingComprobante(c)}
                                                     variant="ghost"
                                                     className="p-2 h-auto" // Ajustar padding y altura para que quepa el icono
-                                                    icon={<EyeIcon />}
+                                                    icon={<EyeIcon className="h-5 w-5" />}
                                                 >
                                                    <span className="sr-only sm:not-sr-only sm:ml-1">Ver</span> {/* Ocultar texto en móvil */}
                                                 </Button>

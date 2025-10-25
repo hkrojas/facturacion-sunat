@@ -19,6 +19,14 @@ const ClientForm = ({ clientData, handleClientChange, handleConsultar, loadingCo
       { value: 'DOLARES', label: 'DOLARES' }
   ];
 
+  // --- CORRECCIÓN EN onSelect ---
+  // Nos aseguramos de que onSelect pase un objeto de evento sintético
+  // simulado para que handleClientChange en la página funcione.
+  const handleDropdownChange = (name, value) => {
+    handleClientChange({ target: { name, value } });
+  };
+  // --- FIN DE LA CORRECCIÓN ---
+
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 border-b border-gray-200 dark:border-gray-700 pb-2">1. Datos del Cliente</h2>
@@ -28,7 +36,7 @@ const ClientForm = ({ clientData, handleClientChange, handleConsultar, loadingCo
             label="Tipo de Documento"
             options={tipoDocumentoOptions}
             selectedOption={clientData.tipo_documento}
-            onSelect={(value) => handleClientChange({ target: { name: 'tipo_documento', value } })}
+            onSelect={(value) => handleDropdownChange('tipo_documento', value)}
         />
 
         <div>
@@ -88,7 +96,7 @@ const ClientForm = ({ clientData, handleClientChange, handleConsultar, loadingCo
           label="Moneda"
           options={monedaOptions}
           selectedOption={clientData.moneda}
-          onSelect={(value) => handleClientChange({ target: { name: 'moneda', value } })}
+          onSelect={(value) => handleDropdownChange('moneda', value)}
       />
     </div>
   );

@@ -39,7 +39,7 @@ const CustomDropdown = ({ label, options, selectedOption, onSelect }) => {
 
     return (
         <div className="relative" ref={dropdownRef}>
-            <label className={labelStyles}>{label}</label>
+            {label && <label className={labelStyles}>{label}</label>}
             <button
                 type="button"
                 className={baseButtonStyles}

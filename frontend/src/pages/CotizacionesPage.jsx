@@ -7,12 +7,12 @@ import CotizacionesList from '../components/CotizacionesList';
 import ClientForm from '../components/ClientForm';
 import ProductsTable from '../components/ProductsTable';
 import Button from '../components/Button';
-// Input ya no es necesario aquí directamente si ClientForm y ProductsTable lo usan
-// import Input from '../components/Input';
 import { API_URL } from '../config';
 import { parseApiError } from '../utils/apiUtils';
 import { AuthContext } from '../context/AuthContext'; // Importar AuthContext
 import { ToastContext } from '../context/ToastContext'; // Importar ToastContext
+// Importar icono
+import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
 
 const CotizacionesPage = () => {
     // Usar useContext para obtener token y addToast
@@ -31,33 +31,26 @@ const CotizacionesPage = () => {
     const [loadingSubmit, setLoadingSubmit] = useState(false);
     const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-    // handleClientChange: Asegura compatibilidad con Input y CustomDropdown
+    // --- handleClientChange CORREGIDO ---
+    // ClientForm nos pasa un evento sintético { target: { name, value } }
+    // tanto para Inputs normales como para CustomDropdown.
     const handleClientChange = (e) => {
-        let name, value;
-        // Si viene de CustomDropdown, 'e' es el valor y 'name' se deduce
-        if (typeof e === 'string') {
-            value = e;
-            // Deducir el 'name' basado en las opciones posibles
-            if (['DNI', 'RUC'].includes(value)) name = 'tipo_documento';
-            else if (['SOLES', 'DOLARES'].includes(value)) name = 'moneda';
-            else name = null; // No debería pasar si solo se usa para tipo_documento y moneda
-        } else if (e.target) { // Si viene de un evento de input normal
-             name = e.target.name;
-             value = e.target.value;
-        } else {
-            // Si el evento no tiene target y no es un string simple, ignorar
-             console.error("Evento de cambio no reconocido:", e);
-             return;
-        }
+        // Obtenemos name y value directamente de e.target
+        const { name, value } = e.target;
 
-        // Si tenemos un 'name' válido, actualizamos
         if (name) {
+             let finalValue = value;
+             // Convertir a mayúsculas para campos específicos
              if (['nombre_cliente', 'direccion_cliente', 'nro_documento'].includes(name)) {
-                value = value.toUpperCase();
+                finalValue = value.toUpperCase();
              }
-             setClientData(prev => ({ ...prev, [name]: value }));
+             setClientData(prev => ({ ...prev, [name]: finalValue }));
+        } else {
+             // Esto no debería pasar si ClientForm está configurado correctamente
+             console.error("Evento de cambio no reconocido (falta name o value):", e);
         }
     };
+    // --- FIN DE LA CORRECCIÓN ---
 
 
     // handleConsultarDatos (sin cambios)
@@ -157,13 +150,10 @@ const CotizacionesPage = () => {
     const activeTabStyle = "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400";
     const inactiveTabStyle = "border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200";
 
-    // Icono del encabezado (sin cambios)
-    const headerIcon = (
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-    );
+    // Icono del encabezado
+    const headerIcon = <ClipboardDocumentListIcon className="h-8 w-8 text-blue-600 dark:text-blue-400" />;
 
     return (
-        // Usar min-h-screen y flex flex-col para asegurar que el footer (si hubiera) quede abajo
         <div className="bg-gray-100 dark:bg-dark-bg-body min-h-screen flex flex-col transition-colors duration-300">
             <PageHeader title="Cotizaciones" icon={headerIcon}>
                 <Link to="/dashboard" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">
@@ -171,11 +161,8 @@ const CotizacionesPage = () => {
                 </Link>
             </PageHeader>
 
-            {/* Añadir flex-grow para que el main ocupe el espacio disponible */}
             <main className="p-4 sm:p-8 flex-grow">
-                 {/* Ajustar max-w para un ancho mayor si se prefiere, ej: max-w-7xl */}
                 <div className="w-full max-w-6xl mx-auto">
-                    {/* Contenedor de pestañas sin margen inferior */}
                     <div className="flex border-b border-gray-300 dark:border-gray-700">
                         <button onClick={() => setActiveTab('crear')} className={`${tabStyle} ${activeTab === 'crear' ? activeTabStyle : inactiveTabStyle}`}>
                             Crear Cotización
@@ -184,15 +171,11 @@ const CotizacionesPage = () => {
                             Ver Cotizaciones
                         </button>
                     </div>
-                    {/* Añadir shadow-lg a Card */}
                     <Card className="rounded-t-none shadow-lg">
                         {activeTab === 'crear' && (
-                            // Añadir space-y-10 al form para espaciado general entre secciones
                             <form onSubmit={handleSubmit} className="space-y-10">
-                                {/* ClientForm y ProductsTable ya tienen sus títulos internos h2 */}
                                 <ClientForm
                                      clientData={clientData}
-                                     // Pasar la función handleClientChange actualizada
                                      handleClientChange={handleClientChange}
                                      handleConsultar={handleConsultarDatos}
                                      loadingConsulta={loadingConsulta}
@@ -203,7 +186,6 @@ const CotizacionesPage = () => {
                                     addProduct={addProduct}
                                     removeProduct={removeProduct}
                                 />
-                                {/* Contenedor para el botón final con padding superior y borde */}
                                 <div className="pt-6 text-right border-t border-gray-200 dark:border-gray-700">
                                     <Button type="submit" variant="primary" loading={loadingSubmit} className="text-lg px-8 py-3">
                                         Guardar Cotización
@@ -217,10 +199,6 @@ const CotizacionesPage = () => {
                     </Card>
                 </div>
             </main>
-             {/* Footer Opcional */}
-             {/* <footer className="p-4 bg-gray-200 dark:bg-gray-800 text-center text-sm text-gray-600 dark:text-gray-400 mt-auto">
-                 Mi Sistema de Cotizaciones © 2025
-             </footer> */}
         </div>
     );
 };

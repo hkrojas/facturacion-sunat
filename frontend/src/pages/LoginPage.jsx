@@ -9,6 +9,8 @@ import Input from '../components/Input'; // Importamos Input
 import { ToastContext } from '../context/ToastContext';
 import { API_URL } from '../config';
 import Button from '../components/Button';
+// Importar iconos
+import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 
 const LoginPage = () => {
     const [email, setEmail] = useState('');
@@ -65,7 +67,7 @@ const LoginPage = () => {
             <AuthLayout title="Iniciar Sesión">
                 <form onSubmit={handleSubmit} className="space-y-6" action="/token" method="post">
                     {/* Usamos el componente Input */}
-                    <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4">
+                    <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4 focus-within:ring-2 ring-blue-500">
                         <UserIcon />
                         <Input
                             id="email"
@@ -81,7 +83,7 @@ const LoginPage = () => {
                         />
                     </div>
                     {/* Usamos el componente Input */}
-                    <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4">
+                    <div className="flex items-center gap-2 bg-gray-200 dark:bg-gray-700 rounded-md py-3 px-4 focus-within:ring-2 ring-blue-500">
                         <LockIcon />
                         <Input
                             id="password"
@@ -95,12 +97,12 @@ const LoginPage = () => {
                             // Estilos específicos
                             className="bg-transparent border-none outline-none focus:ring-0 p-0 flex-grow"
                         />
-                        {/* Botón mostrar/ocultar (sin cambios) */}
-                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="focus:outline-none">
+                        {/* Botón mostrar/ocultar con Heroicons */}
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="focus:outline-none text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-300">
                           {showPassword ? (
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 dark:hover:text-blue-300" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.73 6.957 5.475 4.5 10 4.5s8.27 2.457 9.542 5.5c-1.272 3.043-5.068 5.5-9.542 5.5S1.73 13.043.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
+                                <EyeSlashIcon className="h-5 w-5" />
                             ) : (
-                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 dark:hover:text-blue-300" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M3.707 2.293a1 1 0 00-1.414 1.414l14 14a1 1 0 001.414-1.414l-1.473-1.473A10.014 10.014 0 0019.542 10C18.27 6.957 14.525 4.5 10 4.5c-1.756 0-3.41.59-4.815 1.561L3.707 2.293zM10.707 10.707a2 2 0 00-2.828-2.828l2.828 2.828zM10 12a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" /></svg>
+                                <EyeIcon className="h-5 w-5" />
                             )}
                         </button>
                     </div>
@@ -122,12 +124,9 @@ const LoginPage = () => {
             {/* Modal de error de desactivación (sin cambios) */}
             {deactivationError && (
                 <div className="fixed inset-0 bg-red-900 bg-opacity-80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
-                   {/* ... contenido del modal ... */}
                    <div className="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-2xl w-full max-w-md text-center transform transition-all animate-slide-in-up">
                         <div className="mx-auto flex-shrink-0 flex items-center justify-center h-16 w-16 rounded-full bg-red-100 dark:bg-red-900/50 mb-6">
-                            <svg className="h-10 w-10 text-red-600 dark:text-red-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                            </svg>
+                            <ExclamationTriangleIcon className="h-10 w-10 text-red-600 dark:text-red-400" />
                         </div>
                         <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
                             Acceso Denegado

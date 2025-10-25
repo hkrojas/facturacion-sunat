@@ -48,12 +48,13 @@
   }
 }
 
-/* --- CORRECCIONES PARA TABLAS --- */
+/* --- CORRECCIÓN AÑADIDA --- */
+/*
+  Esta clase personalizada (que tenías en el proyecto anterior)
+  es necesaria para que el texto largo en las celdas de la tabla
+  se corte con "..." en lugar de desbordarse o saltar de línea.
+*/
 @layer components {
-  /*
-    Esta clase personalizada asegura que el texto en las celdas de la tabla
-    se trunque correctamente con puntos suspensivos cuando es demasiado largo.
-  */
   .truncate-cell {
     max-width: 0;
     overflow: hidden;
@@ -61,3 +62,4 @@
     white-space: nowrap;
   }
 }
+

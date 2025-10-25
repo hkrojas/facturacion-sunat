@@ -1,5 +1,5 @@
 // frontend/src/components/CotizacionesList.jsx
-// COMPONENTE ACTUALIZADO: Iconos reemplazados con Heroicons. Código completo.
+// COMPONENTE ACTUALIZADO: Iconos Heroicons y manejo de error mejorado. Código completo.
 
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
@@ -135,7 +135,7 @@ const ActionIcon = ({ icon: IconComponent, color, onClick, disabled = false, too
 
 
 const CotizacionesList = ({ refreshTrigger }) => {
-    // Estados y lógica (sin cambios)
+    // Estados y lógica
     const [cotizaciones, setCotizaciones] = useState([]);
     const [loading, setLoading] = useState(true);
     const [facturandoId, setFacturandoId] = useState(null);
@@ -147,24 +147,53 @@ const CotizacionesList = ({ refreshTrigger }) => {
     const [deletingCotizacionId, setDeletingCotizacionId] = useState(null);
     const [viewingFactura, setViewingFactura] = useState(null);
 
-    // fetchCotizaciones, useEffect, handleFacturar, handleDownloadPdf, handleDeleteClick, confirmDelete, handleEditSuccess (sin cambios)
-     const fetchCotizaciones = async () => {
-        if (!token) return;
+    // --- fetchCotizaciones CORREGIDO con mejor manejo de errores ---
+    const fetchCotizaciones = async () => {
+        if (!token) {
+             setError("No autenticado. Por favor, inicie sesión de nuevo.");
+             setLoading(false);
+             return;
+        }
         setLoading(true);
-        setError('');
+        setError(''); // Limpiar error anterior
         try {
             const response = await fetch(`${API_URL}/cotizaciones/`, {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (!response.ok) throw new Error('No se pudieron cargar las cotizaciones.');
+            if (!response.ok) {
+                 // Intentar obtener un mensaje de error legible
+                 let errorMsg = `Error ${response.status}: ${response.statusText}`;
+                 try {
+                     const errData = await response.json();
+                     errorMsg = parseApiError(errData) || errorMsg;
+                 } catch (jsonError) {
+                     try {
+                        // Si no es JSON, intentar obtener texto plano
+                        const textError = await response.text();
+                        if(textError) errorMsg = textError;
+                     } catch(textErr) {
+                        // Fallback
+                     }
+                 }
+                throw new Error(errorMsg); // Lanzar error con el mensaje obtenido
+            }
             const data = await response.json();
             setCotizaciones(data);
-        } catch (err) { setError(err.message); }
+        } catch (err) {
+            console.error("Error fetching cotizaciones:", err); // Log del error en consola
+            const errorToShow = err.message || "No se pudieron cargar las cotizaciones.";
+            setError(errorToShow); // Mostrar el mensaje de error en el estado
+            addToast(errorToShow, 'error'); // Mostrar toast de error
+        }
         finally { setLoading(false); }
     };
+    
+    // useEffect (sin cambios)
     useEffect(() => {
         fetchCotizaciones();
     }, [token, refreshTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // handleFacturar (sin cambios)
      const handleFacturar = async (cotizacionId, tipoComprobante) => {
         if (tipoComprobante === 'ver_detalles') {
             const cotizacionParaVer = cotizaciones.find(c => c.id === cotizacionId);
@@ -197,6 +226,8 @@ const CotizacionesList = ({ refreshTrigger }) => {
             setFacturandoId(null);
         }
     };
+    
+    // handleDownloadPdf (sin cambios)
     const handleDownloadPdf = async (cot) => {
         try {
             const response = await fetch(`${API_URL}/cotizaciones/${cot.id}/pdf`, {
@@ -206,15 +237,19 @@ const CotizacionesList = ({ refreshTrigger }) => {
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a'); a.href = url;
-            const sanitizedClientName = cot.nombre_cliente.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+            const sanitizedClientName = (cot.nombre_cliente || 'cliente').replace(/[^a-z0-9]/gi, '_').toLowerCase();
             a.download = `Cotizacion_${cot.numero_cotizacion}_${sanitizedClientName}.pdf`;
             document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
         } catch (err) {
             addToast(err.message || 'Error al descargar PDF', 'error');
-            setError(err.message);
+            // No establecemos el error global aquí
         }
     };
+    
+    // handleDeleteClick (sin cambios)
     const handleDeleteClick = (cotizacionId) => { setDeletingCotizacionId(cotizacionId); };
+    
+    // confirmDelete (sin cambios)
     const confirmDelete = async () => {
         if (!deletingCotizacionId) return;
         try {
@@ -222,16 +257,20 @@ const CotizacionesList = ({ refreshTrigger }) => {
                 method: 'DELETE',
                 headers: { 'Authorization': `Bearer ${token}` }
             });
-            if (!response.ok) throw new Error('Error al eliminar la cotización.');
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(parseApiError(errData) || 'Error al eliminar la cotización.');
+            }
             addToast('Cotización eliminada con éxito.', 'success');
             fetchCotizaciones();
         } catch (err) {
-             addToast(err.message || 'Error al eliminar', 'error');
-            setError(err.message);
+             addToast(err.message, 'error');
         } finally {
             setDeletingCotizacionId(null);
         }
     };
+    
+    // handleEditSuccess (sin cambios)
     const handleEditSuccess = () => { setEditingCotizacionId(null); fetchCotizaciones(); };
 
     // Funciones de formato (sin cambios)
@@ -242,14 +281,29 @@ const CotizacionesList = ({ refreshTrigger }) => {
         } catch (e) { return 'Fecha inválida'; }
     };
 
-    // filteredCotizaciones completo
+    // filteredCotizaciones (sin cambios)
     const filteredCotizaciones = cotizaciones.filter(cot =>
         (cot.nombre_cliente?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         (cot.numero_cotizacion || '').includes(searchTerm)
     );
 
+    // --- RENDERIZADO ---
     if (loading) return <LoadingSpinner message="Cargando cotizaciones..." />;
-    if (error) return <p className="text-center text-red-500 mt-8">Error: {error}</p>;
+
+    // --- CORRECCIÓN: Mostrar error si existe ---
+    if (error) {
+        return (
+            <div className="text-center text-red-600 dark:text-red-400 mt-8 p-4 border border-red-300 dark:border-red-700 rounded-md bg-red-50 dark:bg-red-900/30">
+                <ExclamationTriangleIcon className="h-10 w-10 mx-auto mb-2 text-red-500" />
+                <p className="font-semibold">Ocurrió un error al cargar las cotizaciones:</p>
+                <p className="text-sm">{error}</p>
+                 <Button onClick={fetchCotizaciones} variant="secondary" className="mt-4 text-sm">
+                    Reintentar
+                 </Button>
+            </div>
+        );
+    }
+    // --- FIN DE CORRECCIÓN ---
 
     return (
         <>
@@ -299,8 +353,8 @@ const CotizacionesList = ({ refreshTrigger }) => {
                                     const isAnyLoading = facturandoId && facturandoId.id === cot.id;
                                     const isLoading = (type) => isAnyLoading && facturandoId.type === type;
                                     // Usar iconos importados para Factura y Boleta
-                                    const facturaIcon = isLoading('factura') ? <div className="w-5 h-5 border-2 border-dashed rounded-full animate-spin border-purple-400"></div> : <DocumentTextIcon className="h-5 w-5" />;
-                                    const boletaIcon = isLoading('boleta') ? <div className="w-5 h-5 border-2 border-dashed rounded-full animate-spin border-teal-400"></div> : <ReceiptPercentIcon className="h-5 w-5" />;
+                                    const facturaIcon = isLoading('factura') ? <div className="w-5 h-5 border-2 border-dashed rounded-full animate-spin border-purple-400"></div> : DocumentTextIcon;
+                                    const boletaIcon = isLoading('boleta') ? <div className="w-5 h-5 border-2 border-dashed rounded-full animate-spin border-teal-400"></div> : ReceiptPercentIcon;
 
                                     return (
                                     <tr key={cot.id} className="transition-colors duration-200 hover:bg-gray-100 dark:hover:bg-gray-700/50 even:bg-gray-50 dark:even:bg-gray-800/50 staggered-fade-in-up" style={{ '--stagger-delay': `${index * 50}ms` }}>
