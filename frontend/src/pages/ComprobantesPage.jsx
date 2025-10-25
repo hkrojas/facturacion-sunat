@@ -1,15 +1,15 @@
 // frontend/src/pages/ComprobantesPage.jsx
-// COMPONENTE ACTUALIZADO: Icono de cabecera con Heroicons. Código completo.
+// COMPONENTE ACTUALIZADO: Corregidas las rutas de importación.
 
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import PageHeader from '../components/PageHeader';
-import Card from '../components/Card';
-import ComprobantesList from '../components/ComprobantesList';
-import CrearComprobanteForm from '../components/CrearComprobanteForm';
-import NotasEmitidasList from '../components/NotasEmitidasList';
+import PageHeader from '../components/PageHeader.jsx'; // Corregido: Añadida extensión .jsx
+import Card from '../components/Card.jsx'; // Corregido: Añadida extensión .jsx
+import ComprobantesList from '../components/ComprobantesList.jsx'; // Corregido: Añadida extensión .jsx
+import CrearComprobanteForm from '../components/CrearComprobanteForm.jsx'; // Corregido: Añadida extensión .jsx
+import NotasEmitidasList from '../components/NotasEmitidasList.jsx'; // Corregido: Añadida extensión .jsx
 // Importar icono de Heroicons
-import { DocumentTextIcon } from '@heroicons/react/24/outline'; // Usar el mismo que en Dashboard
+import { DocumentTextIcon } from '@heroicons/react/24/outline';
 
 const ComprobantesPage = () => {
     // Estados y lógica (sin cambios)
@@ -35,7 +35,7 @@ const ComprobantesPage = () => {
     return (
         <div className="bg-gray-100 dark:bg-dark-bg-body min-h-screen flex flex-col transition-colors duration-300"> {/* Añadir flex flex-col */}
             {/* Pasar icono Heroicon a PageHeader */}
-            <PageHeader title="Facturación Electrónica" icon={DocumentTextIcon}>
+            <PageHeader title="Facturación Electrónica" icon={<DocumentTextIcon className="h-8 w-8 text-blue-600 dark:text-blue-400" />}> {/* Corregido: Instanciado el icono */}
                 <Link to="/dashboard" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">
                     Volver al Panel
                 </Link>
