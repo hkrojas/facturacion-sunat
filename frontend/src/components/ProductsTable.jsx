@@ -1,10 +1,25 @@
 // frontend/src/components/ProductsTable.jsx
 import React from 'react';
-import Input from './Input.jsx'; // Corregida: Añadida extensión .jsx
-import Button from './Button.jsx'; // Corregida: Añadida extensión .jsx
+// Asegurar rutas correctas con extensión
+import Input from './Input.jsx';
+import Button from './Button.jsx';
 
-const ProductsTable = ({ products, handleProductChange, addProduct, removeProduct }) => {
-  // Eliminamos tableInputStyles
+// Ya no necesitamos la función de cálculo aquí
+
+const ProductsTable = ({ products, handleProductChange: originalHandleProductChange, addProduct, removeProduct }) => {
+
+  // handleProductChange simplificado: solo pasa el evento al padre
+  const handleProductChange = (index, e) => {
+    const { name, value } = e.target;
+    const actualEvent = {
+        target: {
+            name: name,
+            // Convertir a mayúsculas aquí o en el padre
+            value: name === 'descripcion' ? value.toUpperCase() : value
+        }
+    };
+    originalHandleProductChange(index, actualEvent);
+  };
 
   return (
     <div className="space-y-4 mt-8">
@@ -21,16 +36,15 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
             </tr>
           </thead>
           <tbody>
-            {products.map((product, index) => (
-              <tr key={index}>
-                {/* Usamos el componente Input */}
+            {(products || []).map((product, index) => (
+              <tr key={product?.id || index}>
                 <td className="px-1">
                   <Input
                     type="text"
                     name="descripcion"
-                    value={product.descripcion}
-                    onChange={(e) => handleProductChange(index, e)}
-                    className="uppercase" // Mantenemos clase específica
+                    value={product.descripcion || ''}
+                    onChange={(e) => handleProductChange(index, e)} // Llama al manejador simplificado
+                    className="uppercase"
                     required
                   />
                 </td>
@@ -38,38 +52,39 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
                   <Input
                     type="number"
                     name="unidades"
-                    value={product.unidades}
-                    onChange={(e) => handleProductChange(index, e)}
-                    min="1" // Añadir validación mínima si es apropiado
+                    value={product.unidades || 0}
+                    onChange={(e) => handleProductChange(index, e)} // Llama al manejador simplificado
+                    min="0"
+                    step="any"
                   />
                 </td>
                 <td className="px-1">
                   <Input
                     type="number"
-                    step="0.0001" // Permite hasta 4 decimales
+                    step="any"
                     name="precio_unitario"
-                    value={product.precio_unitario}
-                    onChange={(e) => handleProductChange(index, e)}
-                    min="0" // Añadir validación mínima si es apropiado
+                    value={product.precio_unitario || 0}
+                    onChange={(e) => handleProductChange(index, e)} // Llama al manejador simplificado
+                    min="0"
                   />
                 </td>
                 <td className="px-1">
-                  {/* El input de Total es de solo lectura, usamos Input con `readOnly` y `disabled` */}
+                  {/* Muestra el total que viene del estado padre */}
                   <Input
                     type="text"
                     name="total"
-                    value={product.total.toFixed(2)}
+                    value={(product.total ?? 0).toFixed(2)}
                     readOnly
-                    disabled // Usamos disabled para darle estilo de deshabilitado
+                    disabled
+                    className="bg-gray-100 dark:bg-gray-600"
                   />
                 </td>
                 <td className="px-1 text-center">
-                    {/* Usamos Button para consistencia */}
                     <Button
                       type="button"
-                      onClick={() => removeProduct(index)}
-                      variant="danger" // Usamos variante danger
-                      className="px-3 py-1 text-sm font-semibold transition-transform duration-200 hover:scale-110" // Ajustamos estilos
+                      onClick={() => (typeof index === 'number') && removeProduct(index)}
+                      variant="danger"
+                      className="px-3 py-1 text-sm font-semibold transition-transform duration-200 hover:scale-110"
                     >
                         Eliminar
                     </Button>
@@ -79,12 +94,11 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
           </tbody>
         </table>
       </div>
-      {/* Botón de Agregar Producto (sin cambios en estructura) */}
       <Button
         type="button"
         onClick={addProduct}
-        variant="success" // Cambiamos a variante success
-        className="w-full py-3" // Ajustamos padding
+        variant="success"
+        className="w-full py-3"
       >
         + Agregar Producto
       </Button>
@@ -93,3 +107,4 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
 };
 
 export default ProductsTable;
+
