@@ -1,16 +1,16 @@
 // frontend/src/pages/CotizacionesPage.jsx
 import React, { useState, useContext } from 'react'; // Import useContext
 import { Link } from 'react-router-dom';
-import PageHeader from '../components/PageHeader';
-import Card from '../components/Card';
-import CotizacionesList from '../components/CotizacionesList';
-import ClientForm from '../components/ClientForm';
-import ProductsTable from '../components/ProductsTable';
-import Button from '../components/Button';
-import { API_URL } from '../config';
-import { parseApiError } from '../utils/apiUtils';
-import { AuthContext } from '../context/AuthContext'; // Importar AuthContext
-import { ToastContext } from '../context/ToastContext'; // Importar ToastContext
+import PageHeader from '../components/PageHeader'; // Ruta corregida (sin .jsx)
+import Card from '../components/Card'; // Ruta corregida (sin .jsx)
+import CotizacionesList from '../components/CotizacionesList'; // Ruta corregida (sin .jsx)
+import ClientForm from '../components/ClientForm'; // Ruta corregida (sin .jsx)
+import ProductsTable from '../components/ProductsTable'; // Ruta corregida (sin .jsx)
+import Button from '../components/Button'; // Ruta corregida (sin .jsx)
+import { API_URL } from '../config'; // Ruta corregida (sin .js)
+import { parseApiError } from '../utils/apiUtils'; // Ruta corregida (sin .js)
+import { AuthContext } from '../context/AuthContext'; // Ruta corregida (sin .jsx)
+import { ToastContext } from '../context/ToastContext'; // Ruta corregida (sin .jsx)
 // Importar icono
 import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
 
@@ -29,31 +29,24 @@ const CotizacionesPage = () => {
     ]);
     const [loadingConsulta, setLoadingConsulta] = useState(false);
     const [loadingSubmit, setLoadingSubmit] = useState(false);
-    const [refreshTrigger, setRefreshTrigger] = useState(0);
+    // Este valor se incrementa para forzar la recarga de CotizacionesList
+    const [refreshTrigger, setRefreshTrigger] = useState(0); 
 
-    // --- handleClientChange CORREGIDO ---
-    // ClientForm nos pasa un evento sintético { target: { name, value } }
-    // tanto para Inputs normales como para CustomDropdown.
+    // --- handleClientChange (sin cambios) ---
     const handleClientChange = (e) => {
-        // Obtenemos name y value directamente de e.target
         const { name, value } = e.target;
-
         if (name) {
              let finalValue = value;
-             // Convertir a mayúsculas para campos específicos
              if (['nombre_cliente', 'direccion_cliente', 'nro_documento'].includes(name)) {
                 finalValue = value.toUpperCase();
              }
              setClientData(prev => ({ ...prev, [name]: finalValue }));
         } else {
-             // Esto no debería pasar si ClientForm está configurado correctamente
              console.error("Evento de cambio no reconocido (falta name o value):", e);
         }
     };
-    // --- FIN DE LA CORRECCIÓN ---
-
-
-    // handleConsultarDatos (sin cambios)
+    
+    // --- handleConsultarDatos (sin cambios) ---
      const handleConsultarDatos = async () => {
         if (!clientData.nro_documento) {
             addToast('Por favor, ingrese un número de documento.', 'error');
@@ -87,7 +80,7 @@ const CotizacionesPage = () => {
         }
     };
 
-    // handleProductChange (sin cambios)
+    // --- handleProductChange (sin cambios) ---
      const handleProductChange = (index, e) => {
         let { name, value } = e.target;
         const newProducts = [...products];
@@ -96,29 +89,39 @@ const CotizacionesPage = () => {
             value = value.toUpperCase();
         }
         product[name] = value;
-        const unidades = parseFloat(product.unidades) || 0;
+        // Aseguramos parseo float para cálculos
+        const unidades = parseFloat(product.unidades) || 0; 
         const precioUnitario = parseFloat(product.precio_unitario) || 0;
         product.total = unidades * precioUnitario;
         setProducts(newProducts);
     };
 
-    // addProduct (sin cambios)
+    // --- addProduct, removeProduct (sin cambios) ---
     const addProduct = () => {
         setProducts([...products, { descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }]);
     };
-
-    // removeProduct (sin cambios)
      const removeProduct = (index) => {
         const newProducts = products.filter((_, i) => i !== index);
         setProducts(newProducts);
     };
 
-    // handleSubmit (sin cambios)
+    // --- handleSubmit (Asegurando la recarga correcta) ---
     const handleSubmit = async (e) => {
         e.preventDefault();
         setLoadingSubmit(true);
-        const monto_total = products.reduce((sum, p) => sum + p.total, 0);
-        const cotizacionData = { ...clientData, monto_total, productos: products.map(p => ({...p, unidades: parseInt(p.unidades) || 0, precio_unitario: parseFloat(p.precio_unitario) || 0}))};
+        // Calcular montos finales basados en precios CON IGV
+        const monto_total = products.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+        
+        const cotizacionData = { 
+            ...clientData, 
+            monto_total, 
+            productos: products.map(p => ({
+                ...p, 
+                unidades: parseInt(p.unidades) || 0, 
+                // Enviamos el precio unitario exacto como se ingresó (incluye IGV)
+                precio_unitario: parseFloat(p.precio_unitario) || 0 
+            }))
+        };
 
         try {
             const response = await fetch(`${API_URL}/cotizaciones/`, {
@@ -133,10 +136,17 @@ const CotizacionesPage = () => {
             }
             const newCotizacion = await response.json();
             addToast(`¡Cotización N° ${newCotizacion.numero_cotizacion} creada!`, 'success');
+            
+            // 1. Limpiar Formulario
             setClientData({ nombre_cliente: '', direccion_cliente: '', tipo_documento: 'DNI', nro_documento: '', moneda: 'SOLES' });
             setProducts([{ descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }]);
+            
+            // 2. Forzar recarga de la lista
             setRefreshTrigger(prev => prev + 1);
-            setActiveTab('ver');
+            
+            // 3. Cambiar a la pestaña de ver lista
+            setActiveTab('ver'); 
+            
         } catch (error) {
             addToast(error.message, 'error');
         } finally {
@@ -204,4 +214,3 @@ const CotizacionesPage = () => {
 };
 
 export default CotizacionesPage;
-

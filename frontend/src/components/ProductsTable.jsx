@@ -1,7 +1,7 @@
 // frontend/src/components/ProductsTable.jsx
 import React from 'react';
-import Input from './Input'; // Importamos Input
-import Button from './Button'; // Importamos Button
+import Input from './Input.jsx'; // Corregida: Añadida extensión .jsx
+import Button from './Button.jsx'; // Corregida: Añadida extensión .jsx
 
 const ProductsTable = ({ products, handleProductChange, addProduct, removeProduct }) => {
   // Eliminamos tableInputStyles
@@ -17,7 +17,7 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
               <th className="w-2/12 px-4 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Unidades</th>
               <th className="w-2/12 px-4 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">P. Unitario</th>
               <th className="w-2/12 px-4 py-2 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Total</th>
-              <th className="w-1/12 px-4 py-2 text-center text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Acción</th>
+              <th className="w-1/12 px-4 py-2 text-center text-xs font-bold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Acción</th>
             </tr>
           </thead>
           <tbody>
@@ -46,7 +46,7 @@ const ProductsTable = ({ products, handleProductChange, addProduct, removeProduc
                 <td className="px-1">
                   <Input
                     type="number"
-                    step="0.01"
+                    step="0.0001" // Permite hasta 4 decimales
                     name="precio_unitario"
                     value={product.precio_unitario}
                     onChange={(e) => handleProductChange(index, e)}
