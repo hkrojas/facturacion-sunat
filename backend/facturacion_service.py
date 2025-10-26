@@ -7,12 +7,33 @@ from sqlalchemy.orm import Session
 from num2words import num2words
 import traceback
 from typing import List, Optional
-import models, security, schemas
+# Aumentar la precisión de Decimal
+from decimal import Decimal, ROUND_HALF_UP, ROUND_FLOOR, getcontext 
+
+# Importaciones de módulos locales (CORRECCIÓN CLAVE)
+import models 
+import security 
+import schemas
 from config import settings
+
+# Ajustar la precisión global para operaciones con Decimal (50 es un buen valor por defecto)
+getcontext().prec = 50 
 
 class FacturacionException(Exception):
     """Excepción personalizada para errores de facturación."""
     pass
+
+# Establecer la precisión de Valor Unitario: Aumentada a 8 decimales (máx. visto en algunos sistemas)
+UNIT_PRICE_PRECISION = Decimal('0.00000000') 
+# Establecer la precisión de totales (2 decimales)
+TOTAL_PRECISION = Decimal('0.00')
+
+def to_decimal(value):
+    """Convierte un float o str a Decimal, manejando valores nulos o vacíos."""
+    if value is None or value == '':
+        return Decimal('0')
+    # Usar .normalize() para limpiar la representación
+    return Decimal(str(value)).normalize()
 
 # --- FUNCIÓN DE LIMPIEZA ---
 def clean_text_string(text: str) -> str:
@@ -55,6 +76,7 @@ def monto_a_letras(amount: float, currency: str) -> str:
     """Convierte un monto a su representación en palabras para la leyenda."""
     currency_name = "SOLES" if currency == "PEN" else "DÓLARES AMERICANOS"
     try:
+        # Aquí seguimos usando round() para consistencia con num2words que espera float/int
         amount = round(float(amount), 2)
     except (ValueError, TypeError):
         return "MONTO INVÁLIDO"
@@ -154,76 +176,97 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
     if not cotizacion.productos:
          raise FacturacionException("La cotización no tiene productos para facturar.")
 
-    TASA_IGV = 0.18
-    FACTOR_IGV = 1.0 + TASA_IGV
+    TASA_IGV = Decimal('0.18')
+    FACTOR_IGV = Decimal('1.18')
     
     tipo_doc_map = {"DNI": "1", "RUC": "6"}
     client_tipo_doc = tipo_doc_map.get(cotizacion.tipo_documento, "0")
 
     details = []
-    total_venta_lineas_sin_igv = 0
-    total_igv_lineas = 0
+    total_venta_lineas_sin_igv = Decimal('0.00')
+    total_igv_lineas = Decimal('0.00')
     
     for prod in cotizacion.productos:
         if not prod.descripcion or prod.unidades <= 0 or prod.precio_unitario < 0:
              print(f"WARN: Producto inválido omitido: ID={prod.id}, Desc={prod.descripcion}, Uds={prod.unidades}, P.U={prod.precio_unitario}")
              continue
 
-        # 1. Precio Unitario (con IGV, de la cotización)
-        precio_unitario_con_igv = float(prod.precio_unitario)
+        # Convertir a Decimal con precisión controlada
+        precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
+        unidades_d = to_decimal(prod.unidades)
         
-        # 2. Valor Total de la Línea (con IGV) - Este es el valor de referencia final.
-        # Lo calculamos con alta precisión y luego forzamos 2 decimales para el total
-        total_venta_linea_con_igv_raw = prod.unidades * precio_unitario_con_igv
-        total_venta_linea_con_igv = round(total_venta_linea_con_igv_raw, 2)
+        # 1. Valor Total de la Línea (con IGV) - Redondeado a 2 decimales
+        total_venta_linea_con_igv_d = (unidades_d * precio_unitario_con_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
         
-        # 3. Valor Total de la Línea (sin IGV) - Base Imponible
-        # Derivamos la base imponible del total CON IGV (de 2 decimales). 
-        # Esto asegura la coherencia fiscal: Base = Total / 1.18.
-        total_linea_sin_igv = round(total_venta_linea_con_igv / FACTOR_IGV, 2)
+        # --- LÓGICA DE CÁLCULO GENERAL Y ROBUSTO CON DECIMAL (FINAL) ---
         
-        # 4. IGV de Línea
-        # Calculamos por diferencia para asegurar que Total = Base + IGV
-        igv_linea = round(total_venta_linea_con_igv - total_linea_sin_igv, 2)
+        # 2. Base Imponible (mtoValorVenta): Calculada del total con IGV y redondeada a 2 decimales.
+        # Esto asegura que la Base Imponible sea siempre (Total / 1.18), redondeado.
+        base_imponible_calculada_d = (total_venta_linea_con_igv_d / FACTOR_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
         
-        # 5. Valor Unitario (sin IGV)
-        # Calculamos el Valor Unitario a enviar al XML dividiendo el total_linea_sin_igv entre las unidades.
-        # Esto es lo que la SUNAT valida: ValorUnitario * Cantidad = TotalSinIGV.
-        if prod.unidades == 0:
-             valor_unitario_sin_igv = 0.0
+        # 3. IGV de Línea: Calculado por DIFERENCIA (Total con IGV - Base Imponible)
+        igv_linea_d = (total_venta_linea_con_igv_d - base_imponible_calculada_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        
+        # 4. Valor Unitario (sin IGV): Se calcula dividiendo la Base Imponible por la Cantidad.
+        # ESTO ES NECESARIO para que la multiplicación de la línea cuadre, usando la Base Imponible como pivot.
+        if unidades_d == Decimal('0'):
+             valor_unitario_sin_igv_d = Decimal('0')
         else:
-            valor_unitario_sin_igv = total_linea_sin_igv / prod.unidades
-            valor_unitario_sin_igv = round(valor_unitario_sin_igv, 5) # 5 decimales para XML (mínimo requerido)
-        
-        # Acumular totales
-        total_venta_lineas_sin_igv += total_linea_sin_igv
-        total_igv_lineas += igv_linea
-        
+            # Forzamos que V.Unitario * Cantidad = Base Imponible (Redondeada)
+            valor_unitario_sin_igv_d = (base_imponible_calculada_d / unidades_d).quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
+        # 5. Volvemos a calcular la Base Imponible con el Valor Unitario recién calculado
+        # (Este es el valor UBL que SUNAT estrictamente revisa: mtoValorUnitario * cantidad)
+        total_linea_sin_igv_multiplicado_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # --- BLOQUE DE VERIFICACIÓN DE CONSISTENCIA SUNAT ---
+        
+        # Si el valor unitario con 8 decimales por la cantidad da un valor diferente al de la base inicial,
+        # ajustamos el IGV y la Base Final para asegurar la coherencia de la SUMA, que es la restricción final.
+        if total_linea_sin_igv_multiplicado_d != base_imponible_calculada_d:
+            # Opción 1: Base Imponible es la multiplicación exacta (más fiel a UBL)
+            total_linea_sin_igv_d = total_linea_sin_igv_multiplicado_d
+            
+            # Opción 2: El IGV se ajusta para que la suma final cuadre con el Total de la Cotización
+            igv_linea_d = (total_venta_linea_con_igv_d - total_linea_sin_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        else:
+            # Si cuadra (la Base Imponible inicial == Base Imponible recalculada), usamos la Base inicial
+            total_linea_sin_igv_d = base_imponible_calculada_d
+        
+        # --- FIN DEL BLOQUE DE AJUSTE ---
+
+        # Acumular totales
+        total_venta_lineas_sin_igv += total_linea_sin_igv_d
+        total_igv_lineas += igv_linea_d
+        
+        # CORRECCIÓN CLAVE: Usar float(str(Decimal)) en lugar de float(Decimal) para evitar errores de representación de coma flotante en el JSON
         details.append({
             "codProducto": f"P{prod.id}",
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(prod.unidades),
-            "mtoValorUnitario": valor_unitario_sin_igv, 
-            "mtoValorVenta": total_linea_sin_igv,
-            "mtoBaseIgv": total_linea_sin_igv,
-            "porcentajeIgv": TASA_IGV * 100,
-            "igv": igv_linea,
+            "cantidad": float(unidades_d),
+            "mtoValorUnitario": float(valor_unitario_sin_igv_d.to_eng_string()), 
+            "mtoValorVenta": float(total_linea_sin_igv_d.to_eng_string()),
+            "mtoBaseIgv": float(total_linea_sin_igv_d.to_eng_string()),
+            "porcentajeIgv": float(TASA_IGV * 100),
+            "igv": float(igv_linea_d.to_eng_string()),
             "tipAfeIgv": 10,
-            "totalImpuestos": igv_linea,
-            "mtoPrecioUnitario": round(precio_unitario_con_igv, 4) 
+            "totalImpuestos": float(igv_linea_d.to_eng_string()),
+            "mtoPrecioUnitario": float(precio_unitario_con_igv_d.quantize(Decimal('0.0000'), rounding=ROUND_HALF_UP).to_eng_string())
         })
 
     if not details:
          raise FacturacionException("No hay productos válidos en la cotización para facturar.")
 
     # 6. Calcular Totales Globales (Redondeo a 2)
-    mto_oper_gravadas = round(total_venta_lineas_sin_igv, 2)
-    mto_igv_total = round(total_igv_lineas, 2)
-    mto_imp_venta_total = round(mto_oper_gravadas + mto_igv_total, 2) 
+    mto_oper_gravadas_d = total_venta_lineas_sin_igv.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+    mto_igv_total_d = total_igv_lineas.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+    mto_imp_venta_total_d = (mto_oper_gravadas_d + mto_igv_total_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
 
-    # Estos totales ahora son internamente coherentes (Base + IGV = Total)
+    # Convertir a float para el payload JSON
+    mto_oper_gravadas = float(mto_oper_gravadas_d.to_eng_string())
+    mto_igv_total = float(mto_igv_total_d.to_eng_string())
+    mto_imp_venta_total = float(mto_imp_venta_total_d.to_eng_string())
     
     tipo_moneda_api = "PEN" if cotizacion.moneda == "SOLES" else "USD"
     legend_value = monto_a_letras(mto_imp_venta_total, tipo_moneda_api)
@@ -275,8 +318,8 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
 
 def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect, user: models.User, serie: str, correlativo: str) -> dict:
     """Convierte datos de una factura directa al formato esperado por la API."""
-    TASA_IGV = 0.18
-    FACTOR_IGV = 1.0 + TASA_IGV
+    TASA_IGV = Decimal('0.18')
+    FACTOR_IGV = Decimal('1.18')
     
     print("DEBUG: Iniciando conversión factura directa a payload...")
     if not all([user.business_ruc, user.business_name, user.business_address]):
@@ -290,59 +333,91 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
     client_tipo_doc = tipo_doc_map.get(factura_data.tipo_documento_cliente, "0")
 
     details = []
-    total_venta_lineas_sin_igv = 0
-    total_igv_lineas = 0
+    total_venta_lineas_sin_igv = Decimal('0.00')
+    total_igv_lineas = Decimal('0.00')
     
     for i, prod in enumerate(factura_data.productos):
         if not prod.descripcion or prod.unidades <= 0 or prod.precio_unitario < 0:
              print(f"WARN: Producto inválido omitido: Desc={prod.descripcion}, Uds={prod.unidades}, P.U={prod.precio_unitario}")
              continue
 
-        # 1. Precio Unitario (con IGV)
-        precio_unitario_con_igv = float(prod.precio_unitario)
+        # Convertir a Decimal con precisión controlada
+        precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
+        unidades_d = to_decimal(prod.unidades)
         
-        # 2. Total de Venta de Línea (con IGV)
-        total_venta_linea_con_igv = round(prod.unidades * precio_unitario_con_igv, 2)
+        # 1. Valor Total de la Línea (con IGV) - Redondeado a 2 decimales
+        total_venta_linea_con_igv_d = (unidades_d * precio_unitario_con_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
         
-        # 3. Valor Total de la Línea (sin IGV) - Base Imponible
-        total_linea_sin_igv = round(total_venta_linea_con_igv / FACTOR_IGV, 2)
+        # --- LÓGICA DE CÁLCULO GENERAL Y ROBUSTO CON DECIMAL (FINAL) ---
+
+        # 2. Base Imponible (mtoValorVenta): Calculada del total con IGV y redondeada a 2 decimales.
+        # Esto asegura que la Base Imponible sea siempre (Total / 1.18), redondeado.
+        base_imponible_calculada_d = (total_venta_linea_con_igv_d / FACTOR_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # 3. IGV de Línea: Calculado por DIFERENCIA (Total con IGV - Base Imponible)
+        igv_linea_d = (total_venta_linea_con_igv_d - base_imponible_calculada_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
         
-        # 4. IGV de Línea
-        igv_linea = round(total_venta_linea_con_igv - total_linea_sin_igv, 2)
-        
-        # 5. Valor Unitario (sin IGV)
-        if prod.unidades == 0:
-             valor_unitario_sin_igv = 0.0
+        # 4. Valor Unitario (sin IGV): Se calcula dividiendo la Base Imponible por la Cantidad.
+        if unidades_d == Decimal('0'):
+             valor_unitario_sin_igv_d = Decimal('0')
         else:
-            valor_unitario_sin_igv = total_linea_sin_igv / prod.unidades
-            valor_unitario_sin_igv = round(valor_unitario_sin_igv, 5)
+            # Forzamos que V.Unitario * Cantidad = Base Imponible (Redondeada)
+            valor_unitario_sin_igv_d = (base_imponible_calculada_d / unidades_d).quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+
+        # 5. Volvemos a calcular la Base Imponible con el Valor Unitario recién calculado
+        total_linea_sin_igv_multiplicado_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # --- BLOQUE DE VERIFICACIÓN DE CONSISTENCIA SUNAT ---
+        
+        # Si el valor unitario con 8 decimales por la cantidad da un valor diferente al de la base inicial,
+        # ajustamos el IGV y la Base Final. Este bloque asegura que la relación de multiplicación se cumpla.
+        if total_linea_sin_igv_multiplicado_d != base_imponible_calculada_d:
+            # Opción 1: Base Imponible es la multiplicación exacta (más fiel a UBL)
+            final_base_d = total_linea_sin_igv_multiplicado_d
+            
+            # Opción 2: El IGV final se recalcula por diferencia con el Total de la Cotización (Regla fiscal de la suma)
+            final_igv_d = (total_venta_linea_con_igv_d - final_base_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+            # Aplicar los valores finales
+            total_linea_sin_igv_d = final_base_d
+            igv_linea_d = final_igv_d
+        else:
+            # Si cuadra (la Base Imponible inicial == Base Imponible recalculada), usamos la Base inicial
+            total_linea_sin_igv_d = base_imponible_calculada_d
+        
+        # --- FIN DEL BLOQUE DE AJUSTE ---
 
         # Acumular totales
-        total_venta_lineas_sin_igv += total_linea_sin_igv
-        total_igv_lineas += igv_linea
+        total_venta_lineas_sin_igv += total_linea_sin_igv_d
+        total_igv_lineas += igv_linea_d
         
-
+        # CORRECCIÓN CLAVE: Usar float(str(Decimal)) en lugar de float(Decimal) para evitar errores de representación de coma flotante en el JSON
         details.append({
             "codProducto": f"DP{i+1}",
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(prod.unidades),
-            "mtoValorUnitario": valor_unitario_sin_igv,
-            "mtoValorVenta": total_linea_sin_igv,
-            "mtoBaseIgv": total_linea_sin_igv,
-            "porcentajeIgv": TASA_IGV * 100,
-            "igv": igv_linea,
+            "cantidad": float(unidades_d),
+            "mtoValorUnitario": float(valor_unitario_sin_igv_d.to_eng_string()),
+            "mtoValorVenta": float(total_linea_sin_igv_d.to_eng_string()),
+            "mtoBaseIgv": float(total_linea_sin_igv_d.to_eng_string()),
+            "porcentajeIgv": float(TASA_IGV * 100),
+            "igv": float(igv_linea_d.to_eng_string()),
             "tipAfeIgv": 10,
-            "totalImpuestos": igv_linea,
-            "mtoPrecioUnitario": round(precio_unitario_con_igv, 4)
+            "totalImpuestos": float(igv_linea_d.to_eng_string()),
+            "mtoPrecioUnitario": float(precio_unitario_con_igv_d.quantize(Decimal('0.0000'), rounding=ROUND_HALF_UP).to_eng_string())
         })
 
     if not details:
          raise FacturacionException("No hay productos válidos en la factura directa.")
 
-    mto_oper_gravadas = round(total_venta_lineas_sin_igv, 2)
-    mto_igv_total = round(total_igv_lineas, 2)
-    total_venta_con_igv = round(mto_oper_gravadas + mto_igv_total, 2)
+    mto_oper_gravadas_d = total_venta_lineas_sin_igv.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+    mto_igv_total_d = total_igv_lineas.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+    total_venta_con_igv_d = (mto_oper_gravadas_d + mto_igv_total_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+    # Convertir a float para el payload JSON
+    mto_oper_gravadas = float(mto_oper_gravadas_d.to_eng_string())
+    mto_igv_total = float(mto_igv_total_d.to_eng_string())
+    total_venta_con_igv = float(total_venta_con_igv_d.to_eng_string())
 
     tipo_moneda_api = "PEN" if factura_data.moneda == "SOLES" else "USD"
     legend_value = monto_a_letras(total_venta_con_igv, tipo_moneda_api)
@@ -432,7 +507,6 @@ def send_invoice(token: str, payload: dict) -> dict:
              return response_data
         except ValueError:
              print(f"ERROR: Respuesta exitosa ({response.status_code}) pero no es JSON válido.")
-             print(f"Respuesta Raw: {response.text[:1000]}")
              raise FacturacionException(f"Respuesta exitosa ({response.status_code}) pero inválida del servidor de facturación.")
 
 
