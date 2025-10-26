@@ -23,8 +23,8 @@ class FacturacionException(Exception):
     """Excepción personalizada para errores de facturación."""
     pass
 
-# Establecer la precisión de Valor Unitario: Aumentada a 8 decimales (máx. visto en algunos sistemas)
-UNIT_PRICE_PRECISION = Decimal('0.00000000') 
+# Establecer la precisión de Valor Unitario: 6 decimales (recomendación SUNAT)
+UNIT_PRICE_PRECISION = Decimal('0.000000')
 # Establecer la precisión de totales (2 decimales)
 TOTAL_PRECISION = Decimal('0.00')
 
@@ -194,46 +194,43 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
         # Convertir a Decimal con precisión controlada
         precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
         unidades_d = to_decimal(prod.unidades)
-        
-        # 1. Valor Total de la Línea (con IGV) - Redondeado a 2 decimales
-        total_venta_linea_con_igv_d = (unidades_d * precio_unitario_con_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        
-        # --- LÓGICA DE CÁLCULO GENERAL Y ROBUSTO CON DECIMAL (FINAL) ---
-        
-        # 2. Base Imponible (mtoValorVenta): Calculada del total con IGV y redondeada a 2 decimales.
-        # Esto asegura que la Base Imponible sea siempre (Total / 1.18), redondeado.
-        base_imponible_calculada_d = (total_venta_linea_con_igv_d / FACTOR_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        
-        # 3. IGV de Línea: Calculado por DIFERENCIA (Total con IGV - Base Imponible)
-        igv_linea_d = (total_venta_linea_con_igv_d - base_imponible_calculada_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        
-        # 4. Valor Unitario (sin IGV): Se calcula dividiendo la Base Imponible por la Cantidad.
-        # ESTO ES NECESARIO para que la multiplicación de la línea cuadre, usando la Base Imponible como pivot.
+
+        # 1. Valor Total de la Línea (con IGV) - se prioriza el total guardado si existe
+        total_registrado = getattr(prod, 'total', None)
+        if total_registrado is not None:
+            total_venta_linea_con_igv_d = to_decimal(total_registrado)
+        else:
+            total_venta_linea_con_igv_d = unidades_d * precio_unitario_con_igv_d
+        total_venta_linea_con_igv_d = total_venta_linea_con_igv_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # 2. Base Imponible (mtoValorVenta): se mantiene la precisión máxima y luego se redondea
+        base_imponible_precisa_d = total_venta_linea_con_igv_d / FACTOR_IGV
+        base_imponible_redondeada_d = base_imponible_precisa_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # 3. Valor Unitario (sin IGV) usando la base precisa antes del redondeo a 2 decimales
         if unidades_d == Decimal('0'):
              valor_unitario_sin_igv_d = Decimal('0')
         else:
-            # Forzamos que V.Unitario * Cantidad = Base Imponible (Redondeada)
-            valor_unitario_sin_igv_d = (base_imponible_calculada_d / unidades_d).quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+            valor_unitario_sin_igv_preciso_d = base_imponible_precisa_d / unidades_d
+            valor_unitario_sin_igv_d = valor_unitario_sin_igv_preciso_d.quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+            # Recalcular desde P.U. con IGV para consistencia en UBL
+            valor_unitario_sin_igv_preciso_d = precio_unitario_con_igv_d / FACTOR_IGV
+            valor_unitario_sin_igv_d = valor_unitario_sin_igv_preciso_d.quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+            # Recalcular desde P.U. con IGV para evitar arrastre de redondeo por total
+            valor_unitario_sin_igv_preciso_d = precio_unitario_con_igv_d / FACTOR_IGV
+            valor_unitario_sin_igv_d = valor_unitario_sin_igv_preciso_d.quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
-        # 5. Volvemos a calcular la Base Imponible con el Valor Unitario recién calculado
-        # (Este es el valor UBL que SUNAT estrictamente revisa: mtoValorUnitario * cantidad)
-        total_linea_sin_igv_multiplicado_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        # 4. Reconstruir la base imponible con el valor unitario redondeado y asegurar consistencia
+        total_linea_sin_igv_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        # Forzar coherencia: la base redondeada se toma de la multiplicación unidad × cantidad
+        base_imponible_redondeada_d = total_linea_sin_igv_d
+        if total_linea_sin_igv_d != base_imponible_redondeada_d:
+            total_linea_sin_igv_d = base_imponible_redondeada_d
+            if unidades_d != Decimal('0'):
+                valor_unitario_sin_igv_d = (total_linea_sin_igv_d / unidades_d).quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
-        # --- BLOQUE DE VERIFICACIÓN DE CONSISTENCIA SUNAT ---
-        
-        # Si el valor unitario con 8 decimales por la cantidad da un valor diferente al de la base inicial,
-        # ajustamos el IGV y la Base Final para asegurar la coherencia de la SUMA, que es la restricción final.
-        if total_linea_sin_igv_multiplicado_d != base_imponible_calculada_d:
-            # Opción 1: Base Imponible es la multiplicación exacta (más fiel a UBL)
-            total_linea_sin_igv_d = total_linea_sin_igv_multiplicado_d
-            
-            # Opción 2: El IGV se ajusta para que la suma final cuadre con el Total de la Cotización
-            igv_linea_d = (total_venta_linea_con_igv_d - total_linea_sin_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        else:
-            # Si cuadra (la Base Imponible inicial == Base Imponible recalculada), usamos la Base inicial
-            total_linea_sin_igv_d = base_imponible_calculada_d
-        
-        # --- FIN DEL BLOQUE DE AJUSTE ---
+        # 5. IGV de Línea por diferencia con el total (garantiza cuadratura con los totales enviados)
+        igv_linea_d = (total_linea_sin_igv_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
 
         # Acumular totales
         total_venta_lineas_sin_igv += total_linea_sin_igv_d
@@ -245,6 +242,7 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
             "cantidad": float(unidades_d),
+            "priceType": "01",
             "mtoValorUnitario": float(valor_unitario_sin_igv_d.to_eng_string()), 
             "mtoValorVenta": float(total_linea_sin_igv_d.to_eng_string()),
             "mtoBaseIgv": float(total_linea_sin_igv_d.to_eng_string()),
@@ -252,7 +250,7 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
             "igv": float(igv_linea_d.to_eng_string()),
             "tipAfeIgv": 10,
             "totalImpuestos": float(igv_linea_d.to_eng_string()),
-            "mtoPrecioUnitario": float(precio_unitario_con_igv_d.quantize(Decimal('0.0000'), rounding=ROUND_HALF_UP).to_eng_string())
+            "mtoPrecioUnitario": float((valor_unitario_sin_igv_d * FACTOR_IGV).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP).to_eng_string())
         })
 
     if not details:
@@ -344,48 +342,34 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
         # Convertir a Decimal con precisión controlada
         precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
         unidades_d = to_decimal(prod.unidades)
-        
-        # 1. Valor Total de la Línea (con IGV) - Redondeado a 2 decimales
-        total_venta_linea_con_igv_d = (unidades_d * precio_unitario_con_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        
-        # --- LÓGICA DE CÁLCULO GENERAL Y ROBUSTO CON DECIMAL (FINAL) ---
 
-        # 2. Base Imponible (mtoValorVenta): Calculada del total con IGV y redondeada a 2 decimales.
-        # Esto asegura que la Base Imponible sea siempre (Total / 1.18), redondeado.
-        base_imponible_calculada_d = (total_venta_linea_con_igv_d / FACTOR_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        # 1. Valor Total de la Línea (con IGV) - se prioriza el total proporcionado si existe
+        total_registrado = getattr(prod, 'total', None)
+        if total_registrado is not None:
+            total_venta_linea_con_igv_d = to_decimal(total_registrado)
+        else:
+            total_venta_linea_con_igv_d = unidades_d * precio_unitario_con_igv_d
+        total_venta_linea_con_igv_d = total_venta_linea_con_igv_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
 
-        # 3. IGV de Línea: Calculado por DIFERENCIA (Total con IGV - Base Imponible)
-        igv_linea_d = (total_venta_linea_con_igv_d - base_imponible_calculada_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        
-        # 4. Valor Unitario (sin IGV): Se calcula dividiendo la Base Imponible por la Cantidad.
+        # 2. Base Imponible precisa antes del redondeo final
+        base_imponible_precisa_d = total_venta_linea_con_igv_d / FACTOR_IGV
+        base_imponible_redondeada_d = base_imponible_precisa_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+        # 3. Valor unitario sin IGV a partir de la base precisa
         if unidades_d == Decimal('0'):
              valor_unitario_sin_igv_d = Decimal('0')
         else:
-            # Forzamos que V.Unitario * Cantidad = Base Imponible (Redondeada)
-            valor_unitario_sin_igv_d = (base_imponible_calculada_d / unidades_d).quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
+            valor_unitario_sin_igv_preciso_d = base_imponible_precisa_d / unidades_d
+            valor_unitario_sin_igv_d = valor_unitario_sin_igv_preciso_d.quantize(UNIT_PRICE_PRECISION, rounding=ROUND_HALF_UP)
 
-        # 5. Volvemos a calcular la Base Imponible con el Valor Unitario recién calculado
-        total_linea_sin_igv_multiplicado_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        # 4. Reconstruir base e igualarla al valor redondeado requerido por SUNAT
+        total_linea_sin_igv_d = (valor_unitario_sin_igv_d * unidades_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+        if total_linea_sin_igv_d != base_imponible_redondeada_d:
+            # Forzar coherencia hacia cantidad × valor unitario (regla que usa el UBL)
+            base_imponible_redondeada_d = total_linea_sin_igv_d
 
-        # --- BLOQUE DE VERIFICACIÓN DE CONSISTENCIA SUNAT ---
-        
-        # Si el valor unitario con 8 decimales por la cantidad da un valor diferente al de la base inicial,
-        # ajustamos el IGV y la Base Final. Este bloque asegura que la relación de multiplicación se cumpla.
-        if total_linea_sin_igv_multiplicado_d != base_imponible_calculada_d:
-            # Opción 1: Base Imponible es la multiplicación exacta (más fiel a UBL)
-            final_base_d = total_linea_sin_igv_multiplicado_d
-            
-            # Opción 2: El IGV final se recalcula por diferencia con el Total de la Cotización (Regla fiscal de la suma)
-            final_igv_d = (total_venta_linea_con_igv_d - final_base_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-            # Aplicar los valores finales
-            total_linea_sin_igv_d = final_base_d
-            igv_linea_d = final_igv_d
-        else:
-            # Si cuadra (la Base Imponible inicial == Base Imponible recalculada), usamos la Base inicial
-            total_linea_sin_igv_d = base_imponible_calculada_d
-        
-        # --- FIN DEL BLOQUE DE AJUSTE ---
+        # 5. IGV de Línea calculado a partir de la base (regla SUNAT)
+        igv_linea_d = (total_linea_sin_igv_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
 
         # Acumular totales
         total_venta_lineas_sin_igv += total_linea_sin_igv_d
@@ -397,6 +381,7 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
             "cantidad": float(unidades_d),
+            "priceType": "01",
             "mtoValorUnitario": float(valor_unitario_sin_igv_d.to_eng_string()),
             "mtoValorVenta": float(total_linea_sin_igv_d.to_eng_string()),
             "mtoBaseIgv": float(total_linea_sin_igv_d.to_eng_string()),
@@ -404,7 +389,7 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
             "igv": float(igv_linea_d.to_eng_string()),
             "tipAfeIgv": 10,
             "totalImpuestos": float(igv_linea_d.to_eng_string()),
-            "mtoPrecioUnitario": float(precio_unitario_con_igv_d.quantize(Decimal('0.0000'), rounding=ROUND_HALF_UP).to_eng_string())
+            "mtoPrecioUnitario": float((valor_unitario_sin_igv_d * FACTOR_IGV).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP).to_eng_string())
         })
 
     if not details:
