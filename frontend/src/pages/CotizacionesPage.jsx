@@ -1,36 +1,26 @@
  // frontend/src/pages/CotizacionesPage.jsx
  import React, { useState, useContext } from 'react'; // Import useContext
  import { Link } from 'react-router-dom';
- import PageHeader from '../components/PageHeader'; // Ruta corregida (sin .jsx)
- import Card from '../components/Card'; // Ruta corregida (sin .jsx)
- import CotizacionesList from '../components/CotizacionesList'; // Ruta corregida (sin .jsx)
- import ClientForm from '../components/ClientForm'; // Ruta corregida (sin .jsx)
- import ProductsTable from '../components/ProductsTable'; // Ruta corregida (sin .jsx)
- import Button from '../components/Button'; // Ruta corregida (sin .jsx)
- import { API_URL } from '../config'; // Ruta corregida (sin .js)
- import { parseApiError } from '../utils/apiUtils'; // Ruta corregida (sin .js)
- import { AuthContext } from '../context/AuthContext'; // Ruta corregida (sin .jsx)
- import { ToastContext } from '../context/ToastContext'; // Ruta corregida (sin .jsx)
+ // --- IMPORTACIONES CORREGIDAS ---
+ // Corregido: La ruta correcta desde 'pages' a 'components' es '../components/'
+ import PageHeader from '../components/PageHeader.jsx';
+ import Card from '../components/Card.jsx';
+ import CotizacionesList from '../components/CotizacionesList.jsx';
+ import ClientForm from '../components/ClientForm.jsx';
+ import ProductsTable from '../components/ProductsTable.jsx';
+ import Button from '../components/Button.jsx';
+ // Corregido: La ruta correcta desde 'pages' a 'src' es '../'
+ import { API_URL } from '../config.js';
+ import { parseApiError } from '../utils/apiUtils.js';
+ // Corregido: La ruta correcta desde 'pages' a 'context' es '../context/'
+ import { AuthContext } from '../context/AuthContext.jsx';
+ import { ToastContext } from '../context/ToastContext.jsx';
+ // --- FIN IMPORTACIONES CORREGIDAS ---
  // Importar icono
  import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
  
- // --- COPIAR Constantes y Función de Cálculo V3 AQUÍ ---
- const FACTOR_IGV = 1.18;
- const TASA_IGV = 0.18;
- const calcularTotalLineaV3 = (cantidad, precioUnitarioConIGV) => {
-   try {
-     const cantidad_d = Number(cantidad) || 0;
-     const precio_unitario_con_igv_d = Number(precioUnitarioConIGV) || 0;
-     if (cantidad_d <= 0 || precio_unitario_con_igv_d < 0) return 0;
-     const roundToTwoDecimals = (num) => Math.round((num + Number.EPSILON) * 100) / 100;
-     const valor_unitario_sin_igv_calculo_d = roundToTwoDecimals(precio_unitario_con_igv_d / FACTOR_IGV);
-     const mto_valor_venta_linea_d = roundToTwoDecimals(cantidad_d * valor_unitario_sin_igv_calculo_d);
-     const igv_linea_d = roundToTwoDecimals(mto_valor_venta_linea_d * TASA_IGV);
-     const precio_total_linea_d = roundToTwoDecimals(mto_valor_venta_linea_d + igv_linea_d);
-     return precio_total_linea_d;
-   } catch (error) { console.error("Error en calcularTotalLineaV3:", error); return 0; }
- };
- // --- FIN CÁLCULO V3 ---
+ // --- ELIMINAR CONSTANTES Y FUNCIÓN calcularTotalLineaV3 ---
+ // Ya no se necesita la lógica compleja V3 aquí para el total de línea visual
  
  const CotizacionesPage = () => {
      // Usar useContext para obtener token y addToast
@@ -43,8 +33,8 @@
          nro_documento: '', moneda: 'SOLES',
      });
      const [products, setProducts] = useState([
-         // Inicializar total con cálculo V3 si hay valores iniciales
-         { descripcion: '', unidades: 1, precio_unitario: 0, total: calcularTotalLineaV3(1, 0) },
+         // Inicializar total con multiplicación simple
+         { descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }, // 1 * 0 = 0
      ]);
      const [loadingConsulta, setLoadingConsulta] = useState(false);
      const [loadingSubmit, setLoadingSubmit] = useState(false);
@@ -98,31 +88,33 @@
          }
      };
  
-     // --- handleProductChange MODIFICADO ---
+     // --- handleProductChange MODIFICADO PARA USAR MULTIPLICACIÓN SIMPLE ---
       const handleProductChange = (index, e) => {
          const { name, value } = e.target;
  
-         // Actualizar el estado products de forma inmutable
          setProducts(currentProducts =>
              currentProducts.map((product, i) => {
                  if (i === index) {
-                     // Actualizar el campo que cambió
                      const updatedProduct = {
                          ...product,
                          [name]: value
                      };
-                     // Recalcular el total V3 basado en los valores actualizados
-                     const nuevoTotalV3 = calcularTotalLineaV3(
-                         updatedProduct.unidades,
-                         updatedProduct.precio_unitario
-                     );
-                     // Devolver el producto actualizado con el nuevo total V3
+ 
+                     // *** USA MULTIPLICACIÓN SIMPLE AQUÍ ***
+                     const unidades = parseFloat(updatedProduct.unidades) || 0;
+                     const precioUnitario = parseFloat(updatedProduct.precio_unitario) || 0;
+                     const nuevoTotalSimple = unidades * precioUnitario;
+                     // Redondear a 2 decimales para mostrar
+                     const nuevoTotalRedondeado = Math.round((nuevoTotalSimple + Number.EPSILON) * 100) / 100;
+ 
                      return {
                          ...updatedProduct,
-                         total: nuevoTotalV3
+                         // Convierte a mayúsculas si es descripción
+                         descripcion: name === 'descripcion' ? value.toUpperCase() : updatedProduct.descripcion,
+                         total: nuevoTotalRedondeado // Guarda el total simple redondeado
                      };
                  }
-                 return product; // Devolver los demás productos sin cambios
+                 return product;
              })
          );
      };
@@ -130,12 +122,12 @@
  
      // --- addProduct MODIFICADO ---
      const addProduct = () => {
-         // Asegurar que el nuevo producto también tenga el total V3 inicial
+         // Nuevo producto con total 0 (multiplicación simple de 1 * 0)
          setProducts([...products, {
              descripcion: '',
              unidades: 1,
              precio_unitario: 0,
-             total: calcularTotalLineaV3(1, 0) // Calcular total inicial
+             total: 0 // El total inicial es 1 * 0 = 0
          }]);
      };
      // --- FIN addProduct MODIFICADO ---
@@ -145,30 +137,29 @@
          setProducts(newProducts);
      };
  
-     // --- handleSubmit (Asegurando la recarga correcta) ---
+     // --- handleSubmit CORREGIDO PARA INCLUIR total EN PRODUCTOS ---
      const handleSubmit = async (e) => {
          e.preventDefault();
          setLoadingSubmit(true);
  
-         // *** YA NO recalculamos el monto total aquí, usamos la suma de los totales V3 ya calculados ***
+         // *** Calcula el monto total SUMANDO los totales SIMPLES ya calculados en el estado ***
          const monto_total_final = products.reduce((sum, p) => sum + (p.total || 0), 0);
-         // Redondear suma final por si acaso
+         // Redondear suma final por si acaso (aunque los 'total' ya están redondeados)
          const monto_total_redondeado = Math.round((monto_total_final + Number.EPSILON) * 100) / 100;
  
-         // Preparar datos para enviar (asegurando tipos correctos)
+         // Preparar datos para enviar (asegurando tipos correctos Y INCLUYENDO TOTAL)
          const cotizacionData = {
              ...clientData,
-             monto_total: monto_total_redondeado, // Usar la suma de totales V3
+             monto_total: monto_total_redondeado, // Envía la suma de totales simples
              productos: products.map(p => ({
                  descripcion: p.descripcion,
                  unidades: parseInt(p.unidades, 10) || 0, // Asegurar entero
                  precio_unitario: parseFloat(p.precio_unitario) || 0, // Asegurar float
-                 total: p.total // El total V3 ya está calculado
+                 total: p.total // *** INCLUIR el total simple calculado ***
              }))
          };
-         // Quitar el campo 'total' de los productos enviados al backend si no es necesario allí
+         // --- ELIMINAR LA LÍNEA QUE QUITABA EL TOTAL ---
          // cotizacionData.productos = cotizacionData.productos.map(({ total, ...rest }) => rest);
- 
  
          try {
              const response = await fetch(`${API_URL}/cotizaciones/`, {
@@ -186,7 +177,7 @@
  
              // 1. Limpiar Formulario
              setClientData({ nombre_cliente: '', direccion_cliente: '', tipo_documento: 'DNI', nro_documento: '', moneda: 'SOLES' });
-             setProducts([{ descripcion: '', unidades: 1, precio_unitario: 0, total: calcularTotalLineaV3(1, 0) }]); // Resetear con total V3
+             setProducts([{ descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }]); // Resetear con total 0
  
              // 2. Forzar recarga de la lista
              setRefreshTrigger(prev => prev + 1);
@@ -261,3 +252,4 @@
  };
  
  export default CotizacionesPage;
+
