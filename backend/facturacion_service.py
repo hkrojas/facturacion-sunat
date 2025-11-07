@@ -4,7 +4,7 @@ import json
 import base64
 from datetime import datetime, timedelta, timezone, date
 from sqlalchemy.orm import Session
-from num2words import num2words
+from num2words import num2words # <-- IMPORTACIÓN DE NUM2WORDS AÑADIDA
 import traceback
 from typing import List, Optional
 # Aumentar la precisión de Decimal
@@ -16,6 +16,19 @@ import security
 import schemas
 from config import settings
 
+# --- IMPORTACIÓN CENTRALIZADA ---
+# Importar la lógica de cálculo desde el nuevo archivo
+from calculations import ( # <-- CORREGIDO: sin 'core.'
+    to_decimal,
+    get_line_totals_v3,
+    calculate_cotizacion_totals_v3,
+    UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION,
+    TOTAL_PRECISION,
+    TASA_IGV,
+    FACTOR_IGV
+)
+
+
 # Ajustar la precisión global para operaciones con Decimal
 getcontext().prec = 50
 
@@ -23,25 +36,16 @@ class FacturacionException(Exception):
     """Excepción personalizada para errores de facturación."""
     pass
 
-# Establecer la precisión de Valor Unitario SIN IGV para el payload UBL: 10 decimales
-UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = Decimal('0.0000000000')
-# Establecer la precisión INTERMEDIA para el cálculo de mtoValorVenta: 2 decimales (Prueba SUNAT)
-UNIT_PRICE_NO_IGV_CALC_PRECISION = Decimal('0.00')
-# Establecer la precisión de totales (2 decimales)
-TOTAL_PRECISION = Decimal('0.00')
-# Tasa de IGV
-TASA_IGV = Decimal('0.18')
-FACTOR_IGV = Decimal('1.18')
+# --- CONSTANTES ELIMINADAS ---
+# (Movidas a calculations.py)
+# UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = ...
+# UNIT_PRICE_NO_IGV_CALC_PRECISION = ...
+# TOTAL_PRECISION = ...
+# TASA_IGV = ...
+# FACTOR_IGV = ...
+# def to_decimal(value): ...
+# --- FIN CONSTANTES ELIMINADAS ---
 
-def to_decimal(value):
-    """Convierte un float o str a Decimal, manejando valores nulos o vacíos."""
-    if value is None or value == '':
-        return Decimal('0')
-    try:
-        return Decimal(str(value)).normalize()
-    except Exception:
-        print(f"WARN: No se pudo convertir '{value}' a Decimal. Usando 0.")
-        return Decimal('0')
 
 # --- FUNCIÓN DE LIMPIEZA ---
 def clean_text_string(text: str) -> str:
@@ -189,8 +193,8 @@ def get_companies(token: str) -> list:
 
 # --- *** FUNCIÓN REVISADA CON TERCERA ESTRATEGIA DE CÁLCULO *** ---
 def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: models.User, serie: str, correlativo: str, tipo_doc_comprobante: str) -> dict:
-    """Convierte datos de cotización a payload, redondeando valor unitario sin IGV a 2 dec para cálculo de base."""
-    print("DEBUG: Iniciando conversión cotización a payload (ESTRATEGIA VU SIN IGV 2DEC)...")
+    """Convierte datos de cotización a payload, usando la lógica V3 centralizada."""
+    print("DEBUG: Iniciando conversión cotización a payload (ESTRATEGIA V3 Centralizada)...")
     # Validaciones iniciales
     if not all([user.business_ruc, user.business_name, user.business_address]):
         raise FacturacionException("Datos de la empresa (RUC, Razón Social, Dirección) incompletos en el perfil.")
@@ -203,53 +207,47 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
     client_tipo_doc = tipo_doc_map.get(cotizacion.tipo_documento, "0")
 
     details = []
-    total_oper_gravadas_acumulado = Decimal('0.00')
-    total_igv_acumulado = Decimal('0.00')
 
-    for prod in cotizacion.productos:
-        # Validar producto
-        if not prod.descripcion or to_decimal(prod.unidades) <= 0 or to_decimal(prod.precio_unitario) < 0:
-             print(f"WARN: Producto inválido omitido: ID={prod.id}")
-             continue
+    # --- USAR LÓGICA V3 CENTRALIZADA ---
+    # Convertir productos Pydantic/ORM a dict simples para la función
+    productos_dict = [
+        {"unidades": prod.unidades, "precio_unitario": prod.precio_unitario, "descripcion": prod.descripcion, "id": prod.id}
+        for prod in cotizacion.productos
+    ]
+    
+    totals_v3 = calculate_cotizacion_totals_v3(productos_dict)
+    
+    mto_oper_gravadas_final_d = totals_v3['total_gravado_v3']
+    mto_igv_final_d = totals_v3['total_igv_v3']
+    mto_imp_venta_final_d = totals_v3['monto_total_v3']
+    line_totals_v3 = totals_v3['line_totals']
+    # --- FIN LÓGICA V3 ---
 
-        # Convertir a Decimal
-        cantidad_d = to_decimal(prod.unidades)
-        precio_unitario_con_igv_d = to_decimal(prod.precio_unitario) # Precio ingresado (con IGV)
 
-        # 1. Calcular Valor Unitario SIN IGV con alta precisión (para el payload)
-        valor_unitario_sin_igv_payload_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION, rounding=ROUND_HALF_UP)
+    for i, prod_dict in enumerate(productos_dict):
+        # Obtener los totales V3 calculados para esta línea
+        line_totals = line_totals_v3[i]
+        
+        # Extraer valores Decimal
+        valor_unitario_sin_igv_payload_d = line_totals['valor_unitario_sin_igv_payload']
+        mto_valor_venta_linea_d = line_totals['mto_valor_venta_linea']
+        igv_linea_d = line_totals['igv_linea']
+        mto_precio_unitario_d = line_totals['mto_precio_unitario_con_igv']
 
-        # 2. Calcular Valor Unitario SIN IGV redondeado a 2 decimales (para el cálculo de la base)
-        valor_unitario_sin_igv_calculo_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_CALC_PRECISION, rounding=ROUND_HALF_UP)
-
-        # 3. Calcular Valor de Venta de la línea SIN IGV (mtoValorVenta / LineExtensionAmount)
-        #    Se calcula Cantidad * ValorUnitarioSinIGV_RedondeadoA2 y se redondea a 2 decimales.
-        mto_valor_venta_linea_d = (cantidad_d * valor_unitario_sin_igv_calculo_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-        # 4. Calcular IGV de la línea
-        #    Se calcula sobre el mtoValorVenta y se redondea a 2 decimales.
-        igv_linea_d = (mto_valor_venta_linea_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-        # 5. Calcular Precio Total de la línea (Base + IGV)
-        precio_total_linea_d = (mto_valor_venta_linea_d + igv_linea_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-        # 6. Calcular Precio Unitario CON IGV (mtoPrecioUnitario) para el UBL
-        #    Se deriva del total calculado / cantidad y redondea a 2 decimales.
-        if cantidad_d == Decimal('0'):
-            mto_precio_unitario_d = Decimal('0.00')
-        else:
-            mto_precio_unitario_d = (precio_total_linea_d / cantidad_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
-
-        # Acumular totales globales
-        total_oper_gravadas_acumulado += mto_valor_venta_linea_d
-        total_igv_acumulado += igv_linea_d
-
+        # Validar si el producto fue válido (monto_valor_venta > 0 o == 0)
+        # La función de cálculo ya maneja esto devolviendo 0 si es inválido
+        if mto_valor_venta_linea_d == Decimal('0') and igv_linea_d == Decimal('0') and mto_precio_unitario_d == Decimal('0'):
+             # Si el precio original era 0, está bien, si no, era inválido
+             if to_decimal(prod_dict['unidades']) > 0 and to_decimal(prod_dict['precio_unitario']) > 0:
+                 print(f"WARN: Producto inválido omitido (cálculo V3 dio 0): ID={prod_dict['id']}")
+                 continue
+        
         # Convertir a float para el payload JSON
         details.append({
-            "codProducto": f"P{prod.id}",
+            "codProducto": f"P{prod_dict['id']}",
             "unidad": "NIU",
-            "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(cantidad_d.to_eng_string()),
+            "descripcion": clean_text_string(prod_dict['descripcion']),
+            "cantidad": float(to_decimal(prod_dict['unidades']).to_eng_string()),
             "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d.to_eng_string()), # VU sin IGV (alta precisión para UBL)
             "mtoValorVenta": float(mto_valor_venta_linea_d.to_eng_string()), # VT línea sin IGV (2 dec) - CLAVE
             "mtoBaseIgv": float(mto_valor_venta_linea_d.to_eng_string()), # Base IGV = mtoValorVenta
@@ -263,12 +261,7 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
     if not details:
          raise FacturacionException("No hay productos válidos en la cotización para facturar.")
 
-    # Calcular Totales Globales Finales (Redondeo a 2)
-    mto_oper_gravadas_final_d = total_oper_gravadas_acumulado.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    mto_igv_final_d = total_igv_acumulado.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    mto_imp_venta_final_d = (mto_oper_gravadas_final_d + mto_igv_final_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-    # Convertir a float
+    # Convertir totales a float
     mto_oper_gravadas = float(mto_oper_gravadas_final_d.to_eng_string())
     mto_igv_total = float(mto_igv_final_d.to_eng_string())
     mto_imp_venta_total = float(mto_imp_venta_final_d.to_eng_string())
@@ -318,13 +311,13 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
         "details": details,
         "legends": [{"code": "1000", "value": legend_value}]
     }
-    print("DEBUG: Payload de factura generado (ESTRATEGIA VU SIN IGV 2DEC).")
+    print("DEBUG: Payload de factura generado (ESTRATEGIA V3 Centralizada).")
     return payload
 
 # --- *** FUNCIÓN REVISADA CON TERCERA ESTRATEGIA DE CÁLCULO (FACTURA DIRECTA) *** ---
 def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect, user: models.User, serie: str, correlativo: str) -> dict:
-    """Convierte datos de factura directa a payload, redondeando valor unitario sin IGV a 2 dec para cálculo."""
-    print("DEBUG: Iniciando conversión factura directa a payload (ESTRATEGIA VU SIN IGV 2DEC)...")
+    """Convierte datos de factura directa a payload, usando la lógica V3 centralizada."""
+    print("DEBUG: Iniciando conversión factura directa a payload (ESTRATEGIA V3 Centralizada)...")
     # Validaciones iniciales
     if not all([user.business_ruc, user.business_name, user.business_address]):
         raise FacturacionException("Datos de la empresa incompletos en el perfil.")
@@ -337,45 +330,40 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
     client_tipo_doc = tipo_doc_map.get(factura_data.tipo_documento_cliente, "0")
 
     details = []
-    total_oper_gravadas_acumulado = Decimal('0.00')
-    total_igv_acumulado = Decimal('0.00')
+
+    # --- USAR LÓGICA V3 CENTRALIZADA ---
+    # Productos ya vienen como Pydantic/lista de dicts
+    totals_v3 = calculate_cotizacion_totals_v3(factura_data.productos)
+    
+    mto_oper_gravadas_final_d = totals_v3['total_gravado_v3']
+    mto_igv_final_d = totals_v3['total_igv_v3']
+    mto_imp_venta_final_d = totals_v3['monto_total_v3']
+    line_totals_v3 = totals_v3['line_totals']
+    # --- FIN LÓGICA V3 ---
+
 
     for i, prod in enumerate(factura_data.productos):
-        # Validar producto
-        if not prod.descripcion or to_decimal(prod.unidades) <= 0 or to_decimal(prod.precio_unitario) < 0:
-             print(f"WARN: Producto inválido omitido (directo): Desc={prod.descripcion}")
-             continue
+        # Obtener los totales V3 calculados para esta línea
+        line_totals = line_totals_v3[i]
+        
+        # Extraer valores Decimal
+        valor_unitario_sin_igv_payload_d = line_totals['valor_unitario_sin_igv_payload']
+        mto_valor_venta_linea_d = line_totals['mto_valor_venta_linea']
+        igv_linea_d = line_totals['igv_linea']
+        mto_precio_unitario_d = line_totals['mto_precio_unitario_con_igv']
 
-        # Convertir a Decimal
-        cantidad_d = to_decimal(prod.unidades)
-        precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
-
-        # 1. Calcular VU sin IGV (payload)
-        valor_unitario_sin_igv_payload_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION, rounding=ROUND_HALF_UP)
-        # 2. Calcular VU sin IGV (cálculo)
-        valor_unitario_sin_igv_calculo_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_CALC_PRECISION, rounding=ROUND_HALF_UP)
-        # 3. Calcular mtoValorVenta línea
-        mto_valor_venta_linea_d = (cantidad_d * valor_unitario_sin_igv_calculo_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        # 4. Calcular IGV línea
-        igv_linea_d = (mto_valor_venta_linea_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        # 5. Calcular Total línea
-        precio_total_linea_d = (mto_valor_venta_linea_d + igv_linea_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        # 6. Calcular PU con IGV (payload)
-        if cantidad_d == Decimal('0'):
-            mto_precio_unitario_d = Decimal('0.00')
-        else:
-            mto_precio_unitario_d = (precio_total_linea_d / cantidad_d).quantize(Decimal('0.00'), rounding=ROUND_HALF_UP)
-
-        # Acumular totales
-        total_oper_gravadas_acumulado += mto_valor_venta_linea_d
-        total_igv_acumulado += igv_linea_d
+        # Validar si el producto fue válido
+        if mto_valor_venta_linea_d == Decimal('0') and igv_linea_d == Decimal('0') and mto_precio_unitario_d == Decimal('0'):
+             if to_decimal(prod.unidades) > 0 and to_decimal(prod.precio_unitario) > 0:
+                 print(f"WARN: Producto inválido omitido (directo, cálculo V3 dio 0): Desc={prod.descripcion}")
+                 continue
 
         # Convertir a float para JSON
         details.append({
             "codProducto": f"DP{i+1}",
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(cantidad_d.to_eng_string()),
+            "cantidad": float(to_decimal(prod.unidades).to_eng_string()),
             "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d.to_eng_string()),
             "mtoValorVenta": float(mto_valor_venta_linea_d.to_eng_string()),
             "mtoBaseIgv": float(mto_valor_venta_linea_d.to_eng_string()),
@@ -389,12 +377,7 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
     if not details:
          raise FacturacionException("No hay productos válidos en la factura directa.")
 
-    # Calcular Totales Globales Finales
-    mto_oper_gravadas_final_d = total_oper_gravadas_acumulado.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    mto_igv_final_d = total_igv_acumulado.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    mto_imp_venta_final_d = (mto_oper_gravadas_final_d + mto_igv_final_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-    # Convertir a float
+    # Convertir Totales Globales Finales a float
     mto_oper_gravadas = float(mto_oper_gravadas_final_d.to_eng_string())
     mto_igv_total = float(mto_igv_final_d.to_eng_string())
     mto_imp_venta_total = float(mto_imp_venta_final_d.to_eng_string())
@@ -428,7 +411,7 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
         "totalImpuestos": mto_igv_total, "subTotal": mto_imp_venta_total, "mtoImpVenta": mto_imp_venta_total,
         "details": details, "legends": [{"code": "1000", "value": legend_value}]
     }
-    print("DEBUG: Payload de factura directa generado (ESTRATEGIA VU SIN IGV 2DEC).")
+    print("DEBUG: Payload de factura directa generado (ESTRATEGIA V3 Centralizada).")
     return payload
 
 
@@ -1010,4 +993,3 @@ def send_guia_remision(token: str, payload: dict) -> dict:
         print(f"ERROR: Error inesperado en send_guia_remision: {e}")
         traceback.print_exc()
         raise FacturacionException(f"Error inesperado procesando respuesta de envío de guía: {e}")
-

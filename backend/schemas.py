@@ -9,11 +9,17 @@ class ProductoBase(BaseModel):
     descripcion: str = Field(..., min_length=1)
     unidades: int = Field(..., gt=0)
     precio_unitario: float = Field(..., ge=0)
-    total: float
-class ProductoCreate(ProductoBase): pass
+    # --- CORRECCIÓN ---
+    # 'total' ahora es opcional. El backend lo calculará.
+    total: Optional[float] = None 
+
+class ProductoCreate(ProductoBase):
+    pass # Hereda 'total' como opcional
+
 class Producto(ProductoBase):
     id: int
     cotizacion_id: int
+    total: float # En la respuesta (BD), 'total' sí es requerido y siempre existirá.
     model_config = ConfigDict(from_attributes=True)
 
 # --- Esquemas para Notas de Crédito/Débito ---
@@ -71,16 +77,22 @@ class CotizacionBase(BaseModel):
     tipo_documento: str
     nro_documento: str = Field(..., min_length=1)
     moneda: str
-    monto_total: float
+    # --- CORRECCIÓN ---
+    # 'monto_total' ahora es opcional. El backend lo calculará.
+    monto_total: Optional[float] = None
+
 class CotizacionInList(CotizacionBase):
     id: int
     owner_id: int
     numero_cotizacion: str
     fecha_creacion: datetime
     comprobante: Optional[Comprobante] = None
+    monto_total: float # En la respuesta (BD), 'monto_total' sí es requerido.
     model_config = ConfigDict(from_attributes=True)
+
 class CotizacionCreate(CotizacionBase):
     productos: List[ProductoCreate] = Field(..., min_length=1)
+
 class Cotizacion(CotizacionBase):
     id: int
     owner_id: int
@@ -88,6 +100,7 @@ class Cotizacion(CotizacionBase):
     fecha_creacion: datetime
     productos: List[Producto] = []
     comprobante: Optional[Comprobante] = None
+    monto_total: float # En la respuesta (BD), 'monto_total' sí es requerido.
     model_config = ConfigDict(from_attributes=True)
 
 # --- Esquemas de Perfil y Usuario ---

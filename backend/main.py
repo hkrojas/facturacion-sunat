@@ -21,6 +21,8 @@ try:
     # Importar get_db para la inyección de dependencias
     from database import SessionLocal, engine, get_db
     from config import settings
+    # Importar lógica de cálculo
+    import calculations # <-- CORREGIDO: sin 'core.'
 except ImportError as e:
     print(f"Error importando módulos locales: {e}. Asegúrate que estás ejecutando desde el directorio correcto o que PYTHONPATH está configurado.")
     # Considera usar rutas relativas si es necesario, ej: from . import crud
@@ -28,11 +30,11 @@ except ImportError as e:
 
 # Crear tablas si no existen (solo para desarrollo, usualmente se usa Alembic/Flyway)
 # Comenta o elimina esta línea si gestionas las migraciones de otra forma.
-# try:
-#     models.Base.metadata.create_all(bind=engine)
-#     print("INFO: Tablas de base de datos verificadas/creadas.")
-# except Exception as e:
-#     print(f"ERROR: No se pudo crear/verificar las tablas de la base de datos: {e}")
+try:
+    models.Base.metadata.create_all(bind=engine) # <-- DESCOMENTADO
+    print("INFO: Tablas de base de datos verificadas/creadas.")
+except Exception as e:
+    print(f"ERROR: No se pudo crear/verificar las tablas de la base de datos: {e}")
 
 app = FastAPI(title="API de Cotizaciones y Facturación")
 
@@ -477,9 +479,13 @@ def facturar_cotizacion(
             tipo_doc_api = "03"
             serie = "B001" # TODO: Hacer configurable en perfil de usuario
 
-        print(f"DEBUG: [Facturar] Obteniendo siguiente correlativo para {serie} ({tipo_doc_api})...")
-        correlativo = crud.get_next_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc_api)
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        serie_key = f"{tipo_doc_api}-{serie}"
+        print(f"DEBUG: [Facturar] Obteniendo siguiente correlativo para key '{serie_key}'...")
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo = str(correlativo_num) # Convertir a string para el payload
         print(f"DEBUG: [Facturar] Correlativo obtenido: {correlativo}")
+        # --- FIN NUEVA FUNCIÓN ---
 
         print("DEBUG: [Facturar] Convirtiendo cotización a payload de factura...")
         invoice_payload = facturacion_service.convert_cotizacion_to_invoice_payload(
@@ -528,6 +534,8 @@ def facturar_cotizacion(
     except facturacion_service.FacturacionException as e:
         # Errores controlados de la lógica de negocio o comunicación con Apis Perú
         print(f"ERROR: [Facturar] FacturacionException: {str(e)}")
+        # No hacer rollback aquí si el error es de Apis Perú pero queremos guardar el intento
+        # (A menos que la lógica de negocio decida lo contrario)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except HTTPException as e:
         # Re-lanzar excepciones HTTP ya manejadas (404, 400 de validaciones previas)
@@ -537,7 +545,7 @@ def facturar_cotizacion(
         # Capturar cualquier otro error inesperado (ej. BD, conversión de datos, etc.)
         print(f"ERROR: [Facturar] Excepción inesperada para cotización {cotizacion_id}: {str(e)}")
         traceback.print_exc() # Imprime stack trace completo en los logs del servidor
-        db.rollback() # Asegurar rollback en caso de error inesperado después de iniciar la transacción
+        db.rollback() # Asegurar rollback en caso de error inesperado antes de guardar
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Ocurrió un error interno inesperado durante la facturación.")
 
 
@@ -569,8 +577,13 @@ def crear_comprobante_directo(factura_data: schemas.FacturaCreateDirect, db: Ses
     try:
         token_apisperu = facturacion_service.get_apisperu_token(db, current_user)
         serie = "F001" if tipo_doc_api == "01" else "B001" # Configurable?
-        correlativo = crud.get_next_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc_api)
+        
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        serie_key = f"{tipo_doc_api}-{serie}"
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo = str(correlativo_num)
         print(f"DEBUG: [Directo] Correlativo: {correlativo}")
+        # --- FIN NUEVA FUNCIÓN ---
 
         invoice_payload = facturacion_service.convert_direct_invoice_to_payload(
             factura_data=factura_data, user=current_user, serie=serie, correlativo=correlativo
@@ -636,9 +649,13 @@ def crear_nota(nota_data: schemas.NotaCreateAPI, db: Session = Depends(get_db), 
             serie = "FF01" if serie_base == "F" else "BB01" # Configurable?
         else: # Nota de Débito (si se implementa)
             serie = "FD01" if serie_base == "F" else "BD01" # Ejemplo, Configurable?
-
-        correlativo = crud.get_next_nota_correlativo(db, owner_id=current_user.id, serie=serie, tipo_doc=tipo_doc_nota)
+        
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        serie_key = f"{tipo_doc_nota}-{serie}"
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo = str(correlativo_num)
         print(f"DEBUG: [Nota] Serie: {serie}, Correlativo: {correlativo}")
+        # --- FIN NUEVA FUNCIÓN ---
 
         note_payload = facturacion_service.convert_data_to_note_payload(
             comprobante_afectado, nota_data, current_user, serie, correlativo, tipo_doc_nota
@@ -712,10 +729,16 @@ def enviar_resumen_diario(request: ResumenRequest, db: Session = Depends(get_db)
 
     try:
         token_apisperu = facturacion_service.get_apisperu_token(db, current_user)
-        correlativo = crud.get_next_resumen_correlativo(db, owner_id=current_user.id, fecha=fecha_dt)
-        print(f"DEBUG: [Resumen] Correlativo del día: {correlativo}")
+        
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        fecha_str = fecha_dt.strftime('%Y-%m-%d')
+        serie_key = f"RC-{fecha_str}" # Clave para Resumen Diario
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo_str_api = f"{correlativo_num:03d}" # Formato 001, 002
+        print(f"DEBUG: [Resumen] Correlativo del día: {correlativo_num} (API: {correlativo_str_api})")
+        # --- FIN NUEVA FUNCIÓN ---
 
-        summary_payload = facturacion_service.convert_boletas_to_summary_payload(boletas_a_enviar, current_user, fecha_dt, correlativo)
+        summary_payload = facturacion_service.convert_boletas_to_summary_payload(boletas_a_enviar, current_user, fecha_dt, correlativo_num)
         # print("DEBUG: [Resumen] Payload:", json.dumps(summary_payload, indent=2))
 
         api_response = facturacion_service.send_summary(token_apisperu, summary_payload)
@@ -733,7 +756,7 @@ def enviar_resumen_diario(request: ResumenRequest, db: Session = Depends(get_db)
             payload_enviado=summary_payload
         )
 
-        nuevo_resumen = crud.create_resumen_diario(db, resumen_db_data, current_user.id, fecha_dt, correlativo)
+        nuevo_resumen = crud.create_resumen_diario(db, resumen_db_data, current_user.id, fecha_dt, correlativo_num)
         print(f"INFO: [Resumen] Resumen diario creado ID: {nuevo_resumen.id}, Ticket: {nuevo_resumen.ticket}")
         return nuevo_resumen
 
@@ -790,10 +813,16 @@ def enviar_comunicacion_baja(request: schemas.ComunicacionBajaCreateAPI, db: Ses
     try:
         token_apisperu = facturacion_service.get_apisperu_token(db, current_user)
         fecha_comunicacion = datetime.now() # Usar fecha/hora actual del servidor
-        correlativo = crud.get_next_baja_correlativo(db, current_user.id, fecha_comunicacion)
-        print(f"DEBUG: [Baja] Correlativo del día: {correlativo}")
+        
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        fecha_str = fecha_comunicacion.strftime('%Y-%m-%d')
+        serie_key = f"RA-{fecha_str}" # Clave para Comunicación de Baja
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo_str_api = f"{correlativo_num:03d}"
+        print(f"DEBUG: [Baja] Correlativo del día: {correlativo_num} (API: {correlativo_str_api})")
+        # --- FIN NUEVA FUNCIÓN ---
 
-        voided_payload = facturacion_service.convert_facturas_to_voided_payload(items_con_comprobantes, current_user, fecha_comunicacion, correlativo)
+        voided_payload = facturacion_service.convert_facturas_to_voided_payload(items_con_comprobantes, current_user, fecha_comunicacion, correlativo_num)
         # print("DEBUG: [Baja] Payload:", json.dumps(voided_payload, indent=2))
 
         api_response = facturacion_service.send_voided(token_apisperu, voided_payload)
@@ -810,7 +839,7 @@ def enviar_comunicacion_baja(request: schemas.ComunicacionBajaCreateAPI, db: Ses
             payload_enviado=voided_payload
         )
 
-        nueva_baja = crud.create_comunicacion_baja(db, baja_db_data, current_user.id, fecha_comunicacion, correlativo)
+        nueva_baja = crud.create_comunicacion_baja(db, baja_db_data, current_user.id, fecha_comunicacion, correlativo_num)
         print(f"INFO: [Baja] Comunicación de baja creada ID: {nueva_baja.id}, Ticket: {nueva_baja.ticket}")
         return nueva_baja
 
@@ -939,8 +968,14 @@ def create_new_guia_remision(guia_data: schemas.GuiaRemisionCreateAPI, db: Sessi
     try:
         token_apisperu = facturacion_service.get_apisperu_token(db, current_user)
         serie = "T001" # Configurable?
-        correlativo = crud.get_next_guia_correlativo(db, owner_id=current_user.id, serie=serie)
+        
+        # --- USAR NUEVA FUNCIÓN DE CORRELATIVO ---
+        tipo_doc_guia = "09" # Código para Guía de Remisión
+        serie_key = f"{tipo_doc_guia}-{serie}"
+        correlativo_num = crud.get_next_correlativo_safe(db, owner_id=current_user.id, serie_key=serie_key)
+        correlativo = str(correlativo_num)
         print(f"DEBUG: [Guia] Serie: {serie}, Correlativo: {correlativo}")
+        # --- FIN NUEVA FUNCIÓN ---
 
         guia_payload = facturacion_service.convert_data_to_guia_payload(guia_data, current_user, serie, correlativo)
         # print("DEBUG: [Guia] Payload:", json.dumps(guia_payload, indent=2))
@@ -1046,7 +1081,7 @@ def update_user_status_for_admin(user_id: int, status_update: schemas.UserStatus
     try:
         user = crud.update_user_status(db, user_id=user_id, is_active=status_update.is_active, deactivation_reason=status_update.deactivation_reason)
         if not user:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(status_code=status.HTTP_44_NOT_FOUND, detail="User not found")
         # Recalcular cotizaciones_count para la respuesta actualizada
         cotizaciones_count = db.query(func.count(models.Cotizacion.id)).filter(models.Cotizacion.owner_id == user_id).scalar() or 0
         # Crear un objeto de respuesta con los datos requeridos por AdminUserView
@@ -1139,4 +1174,3 @@ def get_admin_cotizacion_pdf(cotizacion_id: int, db: Session = Depends(get_db), 
 #     print("Iniciando servidor Uvicorn...")
 #     # host="127.0.0.1" para desarrollo local, "0.0.0.0" para accesible en red/docker
 #     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
-

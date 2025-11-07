@@ -1,4 +1,4 @@
- // frontend/src/pages/CotizacionesPage.jsx
+// frontend/src/pages/CotizacionesPage.jsx
  import React, { useState, useContext } from 'react'; // Import useContext
  import { Link } from 'react-router-dom';
  // --- IMPORTACIONES CORREGIDAS ---
@@ -19,8 +19,6 @@
  // Importar icono
  import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
  
- // --- ELIMINAR CONSTANTES Y FUNCIÓN calcularTotalLineaV3 ---
- // Ya no se necesita la lógica compleja V3 aquí para el total de línea visual
  
  const CotizacionesPage = () => {
      // Usar useContext para obtener token y addToast
@@ -88,7 +86,7 @@
          }
      };
  
-     // --- handleProductChange MODIFICADO PARA USAR MULTIPLICACIÓN SIMPLE ---
+     // --- handleProductChange: CALCULA EL TOTAL VISUAL (SIMPLE) ---
       const handleProductChange = (index, e) => {
          const { name, value } = e.target;
  
@@ -100,7 +98,7 @@
                          [name]: value
                      };
  
-                     // *** USA MULTIPLICACIÓN SIMPLE AQUÍ ***
+                     // *** USA MULTIPLICACIÓN SIMPLE AQUÍ (SOLO PARA VISUALIZACIÓN) ***
                      const unidades = parseFloat(updatedProduct.unidades) || 0;
                      const precioUnitario = parseFloat(updatedProduct.precio_unitario) || 0;
                      const nuevoTotalSimple = unidades * precioUnitario;
@@ -111,16 +109,16 @@
                          ...updatedProduct,
                          // Convierte a mayúsculas si es descripción
                          descripcion: name === 'descripcion' ? value.toUpperCase() : updatedProduct.descripcion,
-                         total: nuevoTotalRedondeado // Guarda el total simple redondeado
+                         total: nuevoTotalRedondeado // Guarda el total simple VISUAL
                      };
                  }
                  return product;
              })
          );
      };
-     // --- FIN handleProductChange MODIFICADO ---
+     // --- FIN handleProductChange ---
  
-     // --- addProduct MODIFICADO ---
+     // --- addProduct (sin cambios) ---
      const addProduct = () => {
          // Nuevo producto con total 0 (multiplicación simple de 1 * 0)
          setProducts([...products, {
@@ -130,36 +128,38 @@
              total: 0 // El total inicial es 1 * 0 = 0
          }]);
      };
-     // --- FIN addProduct MODIFICADO ---
+     // --- FIN addProduct ---
  
       const removeProduct = (index) => {
          const newProducts = products.filter((_, i) => i !== index);
          setProducts(newProducts);
      };
  
-     // --- handleSubmit CORREGIDO PARA INCLUIR total EN PRODUCTOS ---
+     // --- handleSubmit CORREGIDO PARA NO ENVIAR TOTALES ---
      const handleSubmit = async (e) => {
          e.preventDefault();
          setLoadingSubmit(true);
  
-         // *** Calcula el monto total SUMANDO los totales SIMPLES ya calculados en el estado ***
-         const monto_total_final = products.reduce((sum, p) => sum + (p.total || 0), 0);
-         // Redondear suma final por si acaso (aunque los 'total' ya están redondeados)
-         const monto_total_redondeado = Math.round((monto_total_final + Number.EPSILON) * 100) / 100;
+         // *** EL FRONTEND YA NO CALCULA EL MONTO TOTAL ***
+         // const monto_total_final = products.reduce((sum, p) => sum + (p.total || 0), 0);
+         // const monto_total_redondeado = Math.round((monto_total_final + Number.EPSILON) * 100) / 100;
  
-         // Preparar datos para enviar (asegurando tipos correctos Y INCLUYENDO TOTAL)
+         // Preparar datos para enviar (SIN TOTALES)
          const cotizacionData = {
              ...clientData,
-             monto_total: monto_total_redondeado, // Envía la suma de totales simples
+             // monto_total: monto_total_redondeado, // <-- ELIMINADO
              productos: products.map(p => ({
+                 // Enviar solo los datos crudos. El backend calculará el 'total'.
                  descripcion: p.descripcion,
                  unidades: parseInt(p.unidades, 10) || 0, // Asegurar entero
                  precio_unitario: parseFloat(p.precio_unitario) || 0, // Asegurar float
-                 total: p.total // *** INCLUIR el total simple calculado ***
+                 // total: p.total // <-- ELIMINADO
              }))
          };
-         // --- ELIMINAR LA LÍNEA QUE QUITABA EL TOTAL ---
-         // cotizacionData.productos = cotizacionData.productos.map(({ total, ...rest }) => rest);
+         
+         // Limpiar el schema de productos de cualquier 'total' residual
+         // (Aunque el map anterior ya lo hace, esto es una doble seguridad)
+         cotizacionData.productos = cotizacionData.productos.map(({ total, ...rest }) => rest);
  
          try {
              const response = await fetch(`${API_URL}/cotizaciones/`, {
@@ -230,7 +230,7 @@
                                   />
                                  <ProductsTable
                                      products={products}
-                                     handleProductChange={handleProductChange} // Pasa el nuevo manejador
+                                     handleProductChange={handleProductChange} // Pasa el manejador (calcula total visual)
                                      addProduct={addProduct}
                                      removeProduct={removeProduct}
                                  />
@@ -252,4 +252,3 @@
  };
  
  export default CotizacionesPage;
-

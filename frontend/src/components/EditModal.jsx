@@ -7,6 +7,7 @@ import ProductsTable from './ProductsTable';
 import LoadingSpinner from './LoadingSpinner';
 import { API_URL } from '../config';
 import { parseApiError } from '../utils/apiUtils';
+import Button from './Button'; // Importar Button
 
 const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
     const { token } = useContext(AuthContext);
@@ -14,6 +15,7 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
     const [clientData, setClientData] = useState(null);
     const [products, setProducts] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [loadingSubmit, setLoadingSubmit] = useState(false); // Estado para el botón de guardar
     
     useEffect(() => {
         if (!cotizacionId) return;
@@ -32,7 +34,13 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
                     nro_documento: data.nro_documento,
                     moneda: data.moneda,
                 });
-                setProducts(data.productos.map(p => ({...p, total: p.unidades * p.precio_unitario})));
+                // CORRECCIÓN: Usar el 'total' V3 que viene del backend
+                // Si el backend aún no guarda el 'total' V3 (paso anterior),
+                // esta simple multiplicación (visual) se sobrescribirá al guardar.
+                setProducts(data.productos.map(p => ({
+                    ...p, 
+                    total: p.total || (p.unidades * p.precio_unitario) // Usar total de BD o calcular visual
+                })));
             } catch (err) {
                 addToast(err.message, 'error');
                 closeModal();
@@ -63,9 +71,10 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
         }
 
         product[name] = value;
+        // Calcular total visual simple
         const unidades = parseFloat(product.unidades) || 0;
         const precioUnitario = parseFloat(product.precio_unitario) || 0;
-        product.total = unidades * precioUnitario;
+        product.total = Math.round((unidades * precioUnitario + Number.EPSILON) * 100) / 100;
         setProducts(newProducts);
     };
 
@@ -78,10 +87,29 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
         setProducts(newProducts);
     };
 
+    // --- handleSubmit CORREGIDO PARA NO ENVIAR TOTALES ---
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const monto_total = products.reduce((sum, p) => sum + p.total, 0);
-        const cotizacionData = { ...clientData, monto_total, productos: products.map(p => ({...p, unidades: parseInt(p.unidades) || 0, precio_unitario: parseFloat(p.precio_unitario) || 0}))};
+        setLoadingSubmit(true); // Activar loading
+        
+        // *** EL FRONTEND YA NO CALCULA EL MONTO TOTAL ***
+        // const monto_total = products.reduce((sum, p) => sum + p.total, 0);
+
+        // Preparar datos para enviar (SIN TOTALES)
+        const cotizacionData = { 
+            ...clientData, 
+            // monto_total, // <-- ELIMINADO
+            productos: products.map(p => ({
+                // Enviar solo los datos crudos. El backend calculará 'total' y 'monto_total'.
+                descripcion: p.descripcion,
+                unidades: parseInt(p.unidades, 10) || 0,
+                precio_unitario: parseFloat(p.precio_unitario) || 0,
+                // total: p.total // <-- ELIMINADO
+            }))
+        };
+
+        // Limpiar el schema de productos de cualquier 'total' residual
+        cotizacionData.productos = cotizacionData.productos.map(({ total, id, cotizacion_id, ...rest }) => rest);
         
         try {
             const response = await fetch(`${API_URL}/cotizaciones/${cotizacionId}`, {
@@ -99,6 +127,8 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
             closeModal();
         } catch (err) {
             addToast(err.message, 'error');
+        } finally {
+            setLoadingSubmit(false); // Desactivar loading
         }
     };
 
@@ -111,20 +141,34 @@ const EditModal = ({ cotizacionId, closeModal, onUpdate }) => {
                 <>
                     <div className="flex justify-between items-center mb-6 border-b pb-4 dark:border-gray-700">
                         <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200">
-                            Editar Cotización <span className="text-blue-600 dark:text-blue-400">N° {cotizacionId}</span>
+                            Editar Cotización
                         </h2>
                         <button onClick={closeModal} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-3xl font-bold">&times;</button>
                     </div>
                     <form onSubmit={handleSubmit}>
-                        <ClientForm clientData={clientData} handleClientChange={handleClientChange} />
-                        <ProductsTable products={products} handleProductChange={handleProductChange} addProduct={addProduct} removeProduct={removeProduct} />
+                        {/* El handleConsultarDatos no es necesario en el modal de edición,
+                            por lo que lo pasamos como una función vacía o lo omitimos
+                            si ClientForm lo maneja como opcional.
+                            Aquí lo pasamos como una función vacía. */}
+                        <ClientForm 
+                            clientData={clientData} 
+                            handleClientChange={handleClientChange} 
+                            handleConsultar={() => addToast('La búsqueda de cliente no está disponible en la edición.', 'info')}
+                            loadingConsulta={false}
+                        />
+                        <ProductsTable 
+                            products={products} 
+                            handleProductChange={handleProductChange} 
+                            addProduct={addProduct} 
+                            removeProduct={removeProduct} 
+                        />
                         <div className="mt-8 flex justify-end gap-4 border-t pt-6 dark:border-gray-700">
-                            <button type="button" onClick={closeModal} className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-6 rounded-md transition dark:bg-gray-600 dark:hover:bg-gray-500 dark:text-gray-200">
+                            <Button type="button" onClick={closeModal} variant="secondary">
                                 Cancelar
-                            </button>
-                            <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md transition shadow-md hover:shadow-lg">
+                            </Button>
+                            <Button type="submit" loading={loadingSubmit} variant="primary">
                                 Guardar Cambios
-                            </button>
+                            </Button>
                         </div>
                     </form>
                 </>

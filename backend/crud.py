@@ -2,27 +2,20 @@
 
 from sqlalchemy.orm import Session, noload, joinedload
 from sqlalchemy import func, cast, Date, Integer # Asegurar importación de Integer
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone # <-- IMPORTACIÓN DE TIMEZONE AÑADIDA
 import models, schemas, security
 from typing import Optional, List # Asegurar importación de List
-# --- IMPORTACIONES AÑADIDAS ---
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal # Importar Decimal para tipado
+import traceback # <-- IMPORTACIÓN DE TRACEBACK AÑADIDA
 
-# --- CONSTANTES DE CÁLCULO (REPLICADAS DE facturacion_service.py v3) ---
-UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = Decimal('0.0000000000')
-UNIT_PRICE_NO_IGV_CALC_PRECISION = Decimal('0.00')
-TOTAL_PRECISION = Decimal('0.00')
-TASA_IGV = Decimal('0.18')
-FACTOR_IGV = Decimal('1.18')
-
-def to_decimal(value):
-    """Convierte un float o str a Decimal, manejando valores nulos o vacíos."""
-    if value is None or value == '':
-        return Decimal('0')
-    try:
-        return Decimal(str(value)).normalize()
-    except Exception:
-        return Decimal('0')
+# --- IMPORTACIÓN CENTRALIZADA ---
+# Importar la lógica de cálculo desde el nuevo archivo
+from calculations import ( # <-- CORREGIDO: sin 'core.'
+    calculate_cotizacion_totals_v3,
+    get_line_totals_v3,
+    to_decimal,
+    TOTAL_PRECISION
+)
 # --- FIN CONSTANTES Y FUNCIONES REPLICADAS ---
 
 # --- Funciones de Usuario (sin cambios) ---
@@ -44,43 +37,19 @@ def authenticate_user(db: Session, email: str, password: str):
     return user
 
 # --- Funciones de Cotización ---
-def get_next_cotizacion_number(db: Session):
-    last_cotizacion = db.query(models.Cotizacion).order_by(models.Cotizacion.id.desc()).first()
-    if not last_cotizacion or not last_cotizacion.numero_cotizacion: return "0001"
-    try:
-        last_num = int(last_cotizacion.numero_cotizacion)
-    except (ValueError, TypeError):
-        last_valid = db.query(func.max(cast(models.Cotizacion.numero_cotizacion, Integer))).scalar()
-        last_num = last_valid if last_valid is not None else 0
-    return f"{last_num + 1:04d}"
-
-# --- FUNCIÓN DE CÁLCULO TOTAL CONSISTENTE (V3) ---
-def calcular_monto_total_consistente(productos: List[schemas.ProductoCreate]) -> Decimal:
-    """Calcula el monto total usando la lógica V3 consistente con SUNAT."""
-    monto_total_acumulado_d = Decimal('0.00')
-    for prod in productos:
-        cantidad_d = to_decimal(prod.unidades)
-        precio_unitario_con_igv_d = to_decimal(prod.precio_unitario)
-
-        if cantidad_d <= 0 or precio_unitario_con_igv_d < 0:
-            continue # Omitir productos inválidos
-
-        # Replicar lógica v3 de facturacion_service.py para obtener precio_total_linea_d
-        valor_unitario_sin_igv_calculo_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_CALC_PRECISION, rounding=ROUND_HALF_UP)
-        mto_valor_venta_linea_d = (cantidad_d * valor_unitario_sin_igv_calculo_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        igv_linea_d = (mto_valor_venta_linea_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        precio_total_linea_d = (mto_valor_venta_linea_d + igv_linea_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-        monto_total_acumulado_d += precio_total_linea_d
-
-    return monto_total_acumulado_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-# --- FIN FUNCIÓN DE CÁLCULO ---
 
 def create_cotizacion(db: Session, cotizacion: schemas.CotizacionCreate, user_id: int):
-    numero_cotizacion = get_next_cotizacion_number(db)
+    # Obtener el número de cotización (esto necesita la nueva lógica segura)
+    serie_key = f"COT-{user_id}" # Clave única para cotizaciones de este usuario
+    next_correlativo_num = get_next_correlativo_safe(db=db, owner_id=user_id, serie_key=serie_key)
+    numero_cotizacion = f"{next_correlativo_num:04d}" # Formato 0001, 0002, etc.
+
     # --- CÁLCULO CONSISTENTE DEL MONTO TOTAL (V3) ---
-    monto_total_calculado_v3 = calcular_monto_total_consistente(cotizacion.productos)
+    totals_v3 = calculate_cotizacion_totals_v3(cotizacion.productos)
+    monto_total_calculado_v3 = totals_v3['monto_total_v3']
+    line_totals_v3 = totals_v3['line_totals']
     # --- FIN CÁLCULO ---
+
     db_cotizacion = models.Cotizacion(
         **cotizacion.model_dump(exclude={"productos", "monto_total"}), # Excluir monto_total original
         owner_id=user_id,
@@ -88,21 +57,23 @@ def create_cotizacion(db: Session, cotizacion: schemas.CotizacionCreate, user_id
         monto_total=float(monto_total_calculado_v3.to_eng_string()) # Guardar el monto V3
     )
     db.add(db_cotizacion)
-    db.commit()
+    db.commit() # <-- El commit se mueve aquí para que la cotización tenga ID
     db.refresh(db_cotizacion)
-    for producto_data in cotizacion.productos:
-        # Calcular el total visual (Cantidad * PU con IGV) para guardar en producto.total
-        cantidad_prod_d = to_decimal(producto_data.unidades)
-        pu_prod_d = to_decimal(producto_data.precio_unitario)
-        total_visual_prod = (cantidad_prod_d * pu_prod_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+
+    # Iterar sobre los productos Y los totales de línea calculados
+    for producto_data, line_total_data in zip(cotizacion.productos, line_totals_v3):
+        # El 'total' que guardamos en la BD es el precio_total_linea (V3)
+        total_linea_v3 = line_total_data['precio_total_linea']
+
         db_producto = models.Producto(
-            **producto_data.model_dump(exclude={'total'}),
-            cotizacion_id=db_cotizacion.id,
-            total=float(total_visual_prod.to_eng_string()) # Guardar el total visual
+            **producto_data.model_dump(exclude={'total'}), # Excluir 'total' si viene del schema
+            cotizacion_id=db_cotizacion.id, # <-- Usar el ID de la cotización recién creada
+            total=float(total_linea_v3.to_eng_string()) # Guardar el total V3
         )
         db.add(db_producto)
-    db.commit()
-    db.refresh(db_cotizacion)
+    
+    db.commit() # <-- Segundo commit para guardar los productos
+    db.refresh(db_cotizacion) # Refrescar de nuevo para cargar los productos
     print(f"DEBUG: Cotización {numero_cotizacion} creada. Monto Total V3 guardado: {monto_total_calculado_v3}") # Log para verificar
     return db_cotizacion
 
@@ -126,7 +97,9 @@ def update_cotizacion(db: Session, cotizacion_id: int, cotizacion_data: schemas.
     if not db_cotizacion: return None
 
     # --- RECALCULAR MONTO TOTAL CONSISTENTE (V3) ---
-    monto_total_calculado_v3 = calcular_monto_total_consistente(cotizacion_data.productos)
+    totals_v3 = calculate_cotizacion_totals_v3(cotizacion_data.productos)
+    monto_total_calculado_v3 = totals_v3['monto_total_v3']
+    line_totals_v3 = totals_v3['line_totals']
     # --- FIN RECALCULO ---
 
     # Actualizar campos de la cotización
@@ -137,15 +110,14 @@ def update_cotizacion(db: Session, cotizacion_id: int, cotizacion_data: schemas.
 
     # Eliminar productos antiguos
     db.query(models.Producto).filter(models.Producto.cotizacion_id == cotizacion_id).delete()
-    # Añadir productos nuevos (calculando su total visual)
-    for producto_data in cotizacion_data.productos:
-        cantidad_prod_d = to_decimal(producto_data.unidades)
-        pu_prod_d = to_decimal(producto_data.precio_unitario)
-        total_visual_prod = (cantidad_prod_d * pu_prod_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
+    # Añadir productos nuevos (calculando su total V3)
+    for producto_data, line_total_data in zip(cotizacion_data.productos, line_totals_v3):
+        total_linea_v3 = line_total_data['precio_total_linea']
+        
         db_producto = models.Producto(
             **producto_data.model_dump(exclude={'total'}),
             cotizacion_id=cotizacion_id,
-            total=float(total_visual_prod.to_eng_string())
+            total=float(total_linea_v3.to_eng_string())
         )
         db.add(db_producto)
 
@@ -162,7 +134,6 @@ def delete_cotizacion(db: Session, cotizacion_id: int, owner_id: int):
     return True
 
 # --- Funciones para Comprobante (sin cambios relevantes aquí) ---
-# ... (código existente sin cambios) ...
 def create_comprobante(db: Session, comprobante: schemas.ComprobanteCreate, owner_id: int, cotizacion_id: Optional[int] = None):
     db_comprobante = models.Comprobante(**comprobante.model_dump(), owner_id=owner_id, cotizacion_id=cotizacion_id)
     db.add(db_comprobante)
@@ -184,43 +155,107 @@ def get_comprobante_by_id(db: Session, comprobante_id: int, owner_id: int):
         .first()
 
 
-def get_next_correlativo(db: Session, owner_id: int, serie: str, tipo_doc: str) -> str:
-    # Buscar el último correlativo numérico válido
-    last_comprobante = db.query(models.Comprobante)\
-        .filter(
-            models.Comprobante.owner_id == owner_id,
-            models.Comprobante.serie == serie,
-            models.Comprobante.tipo_doc == tipo_doc,
-            func.length(models.Comprobante.correlativo) > 0, # Asegurar que no esté vacío
-            models.Comprobante.correlativo.regexp_match('^[0-9]+$') # Asegurar que sea numérico
-        )\
-        .order_by(cast(models.Comprobante.correlativo, Integer).desc())\
-        .first()
-
-    if not last_comprobante or not last_comprobante.correlativo:
-        return "1"
+# --- NUEVA FUNCIÓN SEGURA PARA CORRELATIVOS (CON SINCRONIZACIÓN) ---
+def get_next_correlativo_safe(db: Session, owner_id: int, serie_key: str) -> int:
+    """
+    Obtiene el siguiente correlativo para una serie de forma segura (con bloqueo de fila).
+    Crea la serie si no existe, sincronizándola con datos existentes.
+    'serie_key' debe ser una clave única, ej: "01-F001" o "COT-1" (para cotizaciones user 1)
+    """
     try:
-        # Intentar convertir a entero y sumar 1
-        return str(int(last_comprobante.correlativo) + 1)
-    except (ValueError, TypeError):
-        # Si falla (aunque el filtro debería prevenirlo), devolver '1' como fallback seguro
-        print(f"WARN: No se pudo convertir el último correlativo '{last_comprobante.correlativo}' a número para {serie}-{tipo_doc}. Reiniciando a 1.")
-        return "1"
+        # 1. Buscar el registro de la serie y bloquear la fila
+        serie_correlativo = db.query(models.SeriesCorrelativo).filter(
+            models.SeriesCorrelativo.owner_id == owner_id,
+            models.SeriesCorrelativo.serie_key == serie_key
+        ).with_for_update().first() # <-- ¡BLOQUEO DE FILA!
+
+        # 2. Si no existe, crearla Y SINCRONIZARLA
+        if not serie_correlativo:
+            print(f"DEBUG: [Correlativo] Creando nueva serie para owner {owner_id}, key '{serie_key}'")
+            
+            # --- NUEVA LÓGICA DE SINCRONIZACIÓN ---
+            last_num = 0
+            try:
+                if serie_key.startswith("COT-"):
+                    # Es una Cotización
+                    last_cot = db.query(func.max(cast(models.Cotizacion.numero_cotizacion, Integer))).filter(
+                        models.Cotizacion.owner_id == owner_id
+                    ).scalar()
+                    last_num = last_cot or 0
+                
+                elif serie_key.startswith("RC-") or serie_key.startswith("RA-"):
+                    # Es Resumen o Baja. El correlativo es DIARIO, por lo que last_num = 0 es correcto.
+                    last_num = 0
+                
+                elif serie_key.startswith("09-"):
+                    # Es Guía de Remisión (ej: "09-T001")
+                    tipo_doc, serie = serie_key.split('-', 1)
+                    last_guia = db.query(func.max(cast(models.GuiaRemision.correlativo, Integer))).filter(
+                        models.GuiaRemision.owner_id == owner_id,
+                        # models.GuiaRemision.tipo_doc == tipo_doc, # tipo_doc es siempre 09
+                        models.GuiaRemision.serie == serie
+                    ).scalar()
+                    last_num = last_guia or 0
+
+                elif serie_key.startswith("07-") or serie_key.startswith("08-"):
+                    # Es Nota de Crédito/Débito (ej: "07-FF01")
+                    tipo_doc, serie = serie_key.split('-', 1)
+                    last_nota = db.query(func.max(cast(models.Nota.correlativo, Integer))).filter(
+                        models.Nota.owner_id == owner_id,
+                        models.Nota.tipo_doc == tipo_doc,
+                        models.Nota.serie == serie
+                    ).scalar()
+                    last_num = last_nota or 0
+
+                elif serie_key.startswith("01-") or serie_key.startswith("03-"):
+                    # Es Factura o Boleta (ej: "01-F001")
+                    tipo_doc, serie = serie_key.split('-', 1)
+                    last_comp = db.query(func.max(cast(models.Comprobante.correlativo, Integer))).filter(
+                        models.Comprobante.owner_id == owner_id,
+                        models.Comprobante.tipo_doc == tipo_doc,
+                        models.Comprobante.serie == serie
+                    ).scalar()
+                    last_num = last_comp or 0
+                
+                print(f"DEBUG: [Correlativo] Sincronizando: Último correlativo encontrado para '{serie_key}' es {last_num}.")
+
+            except Exception as sync_e:
+                print(f"ERROR: [Correlativo] Falló la sincronización para '{serie_key}': {sync_e}. Asumiendo 0.")
+                traceback.print_exc()
+                last_num = 0
+            # --- FIN LÓGICA DE SINCRONIZACIÓN ---
+
+            # --- CORRECCIÓN CLAVE ---
+            # El *nuevo* número es last_num + 1.
+            # Este es el número que debemos guardar y devolver.
+            nuevo_correlativo_num = last_num + 1 
+            
+            serie_correlativo = models.SeriesCorrelativo(
+                owner_id=owner_id,
+                serie_key=serie_key,
+                ultimo_correlativo=nuevo_correlativo_num # <-- Guardar el nuevo número
+            )
+            db.add(serie_correlativo)
+        
+        # 3. Si existe, incrementar el correlativo
+        else:
+            nuevo_correlativo_num = serie_correlativo.ultimo_correlativo + 1
+            serie_correlativo.ultimo_correlativo = nuevo_correlativo_num
+            print(f"DEBUG: [Correlativo] Incrementando serie owner {owner_id}, key '{serie_key}' a {nuevo_correlativo_num}")
+
+        # 4. Confirmar la transacción (la sesión de FastAPI lo hará)
+        # db.commit() # ¡NO HACER COMMIT AQUÍ! El decorador de FastAPI lo maneja.
+        
+        return nuevo_correlativo_num
+
+    except Exception as e:
+        # db.rollback() # ¡NO HACER ROLLBACK AQUÍ! El decorador lo maneja.
+        print(f"ERROR: [Correlativo] Error obteniendo correlativo para key '{serie_key}': {e}")
+        traceback.print_exc()
+        raise # Re-lanzar la excepción para que FastAPI haga rollback
 
 
 # --- Funciones para Guía de Remisión (sin cambios) ---
-def get_next_guia_correlativo(db: Session, owner_id: int, serie: str) -> str:
-    last_guia = db.query(models.GuiaRemision)\
-        .filter(models.GuiaRemision.owner_id == owner_id, models.GuiaRemision.serie == serie)\
-        .order_by(cast(models.GuiaRemision.correlativo, Integer).desc())\
-        .first()
-    if not last_guia or not last_guia.correlativo:
-        return "1"
-    try:
-        return str(int(last_guia.correlativo) + 1)
-    except (ValueError, TypeError):
-        return "1"
-
 
 def create_guia_remision(db: Session, guia_data: schemas.GuiaRemisionDB, owner_id: int, serie: str, correlativo: str, fecha_emision: datetime):
     db_guia = models.GuiaRemision(
@@ -241,17 +276,6 @@ def get_guias_remision_by_owner(db: Session, owner_id: int):
         .order_by(models.GuiaRemision.id.desc()).all()
 
 # --- Funciones para Notas (sin cambios) ---
-def get_next_nota_correlativo(db: Session, owner_id: int, serie: str, tipo_doc: str) -> str:
-    last_nota = db.query(models.Nota)\
-        .filter(models.Nota.owner_id == owner_id, models.Nota.serie == serie, models.Nota.tipo_doc == tipo_doc)\
-        .order_by(cast(models.Nota.correlativo, Integer).desc())\
-        .first()
-    if not last_nota or not last_nota.correlativo:
-        return "1"
-    try:
-        return str(int(last_nota.correlativo) + 1)
-    except (ValueError, TypeError):
-        return "1"
 
 def create_nota(db: Session, nota_data: schemas.NotaDB, owner_id: int, comprobante_afectado_id: int, tipo_doc: str, serie: str, correlativo: str, fecha_emision: datetime, cod_motivo: str):
     db_nota = models.Nota(
@@ -275,18 +299,6 @@ def get_notas_by_owner(db: Session, owner_id: int):
         .order_by(models.Nota.id.desc()).all()
 
 # --- Funciones Resumen/Baja (sin cambios) ---
-def get_next_resumen_correlativo(db: Session, owner_id: int, fecha: datetime) -> int:
-    last_resumen = db.query(models.ResumenDiario)\
-        .filter(models.ResumenDiario.owner_id == owner_id, cast(models.ResumenDiario.fecha_resumen, Date) == fecha.date())\
-        .order_by(models.ResumenDiario.correlativo.desc())\
-        .first()
-    if not last_resumen or not last_resumen.correlativo:
-        return 1
-    try:
-        return int(last_resumen.correlativo) + 1
-    except (ValueError, TypeError):
-        return 1
-
 
 def create_resumen_diario(db: Session, resumen_data: schemas.ResumenDiarioDB, owner_id: int, fecha_resumen: datetime, correlativo: int):
     db_resumen = models.ResumenDiario(
@@ -299,18 +311,6 @@ def create_resumen_diario(db: Session, resumen_data: schemas.ResumenDiarioDB, ow
     db.commit()
     db.refresh(db_resumen)
     return db_resumen
-
-def get_next_baja_correlativo(db: Session, owner_id: int, fecha: datetime) -> int:
-    last_baja = db.query(models.ComunicacionBaja)\
-        .filter(models.ComunicacionBaja.owner_id == owner_id, cast(models.ComunicacionBaja.fecha_comunicacion, Date) == fecha.date())\
-        .order_by(models.ComunicacionBaja.correlativo.desc())\
-        .first()
-    if not last_baja or not last_baja.correlativo:
-        return 1
-    try:
-        return int(last_baja.correlativo) + 1
-    except (ValueError, TypeError):
-         return 1
 
 def create_comunicacion_baja(db: Session, baja_data: schemas.ComunicacionBajaDB, owner_id: int, fecha_comunicacion: datetime, correlativo: int):
     db_baja = models.ComunicacionBaja(

@@ -1,7 +1,7 @@
 # backend/models.py
 
 from sqlalchemy import (Column, Integer, String, Boolean, Float, DateTime, 
-                        ForeignKey, JSON, Text, LargeBinary)
+                        ForeignKey, JSON, Text, LargeBinary, UniqueConstraint)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database import Base
@@ -42,6 +42,8 @@ class User(Base):
     # --- NUEVAS RELACIONES ---
     resumenes_diarios = relationship("ResumenDiario", back_populates="owner", cascade="all, delete-orphan")
     comunicaciones_baja = relationship("ComunicacionBaja", back_populates="owner", cascade="all, delete-orphan")
+    # --- NUEVA RELACIÓN PARA CORRELATIVOS ---
+    series_correlativos = relationship("SeriesCorrelativo", back_populates="owner", cascade="all, delete-orphan")
 
 
 class Cotizacion(Base):
@@ -171,3 +173,19 @@ class ComunicacionBaja(Base):
     fecha_creacion = Column(DateTime(timezone=True), server_default=func.now())
 
     owner = relationship("User", back_populates="comunicaciones_baja")
+
+# --- NUEVO MODELO PARA GESTIONAR CORRELATIVOS ---
+class SeriesCorrelativo(Base):
+    __tablename__ = "series_correlativos"
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Clave única para la serie, ej: "01-F001" (Factura), "09-T001" (Guia), "RC-2025-11-05" (Resumen Diario)
+    serie_key = Column(String, index=True) 
+    
+    ultimo_correlativo = Column(Integer, default=0)
+    
+    owner = relationship("User", back_populates="series_correlativos")
+    
+    # Asegura que cada usuario solo tenga una entrada por clave de serie
+    __table_args__ = (UniqueConstraint('owner_id', 'serie_key', name='_owner_serie_key_uc'),)

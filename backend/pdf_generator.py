@@ -10,31 +10,27 @@ from reportlab.lib.units import inch
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import models
-import qrcode
-from num2words import num2words
+import qrcode # <-- IMPORTACIÓN DE QRCODE AÑADIDA
+from num2words import num2words # <-- IMPORTACIÓN DE NUM2WORDS AÑADIDA
 # --- IMPORTACIONES AÑADIDAS ---
 from decimal import Decimal, ROUND_HALF_UP, getcontext
 import traceback # Para mejor logging de errores
 
+# --- IMPORTACIÓN CENTRALIZADA ---
+# Importar la lógica de cálculo desde el nuevo archivo
+from calculations import ( # <-- CORREGIDO: sin 'core.'
+    to_decimal,
+    get_line_totals_v3,
+    calculate_cotizacion_totals_v3,
+    TOTAL_PRECISION
+)
+
 # Ajustar precisión global
 getcontext().prec = 50
 
-# --- CONSTANTES DE CÁLCULO (REPLICADAS DE facturacion_service.py v3) ---
-UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = Decimal('0.0000000000')
-UNIT_PRICE_NO_IGV_CALC_PRECISION = Decimal('0.00')
-TOTAL_PRECISION = Decimal('0.00')
-TASA_IGV = Decimal('0.18')
-FACTOR_IGV = Decimal('1.18')
-
-def to_decimal(value):
-    """Convierte un float o str a Decimal, manejando valores nulos o vacíos."""
-    if value is None or value == '':
-        return Decimal('0')
-    try:
-        return Decimal(str(value)).normalize()
-    except Exception:
-        return Decimal('0')
-# --- FIN DE CONSTANTES Y FUNCIONES REPLICADAS ---
+# --- CONSTANTES DE CÁLCULO (ELIMINADAS) ---
+# ... (Movidas a calculations.py) ...
+# --- FIN DE CONSTANTES ELIMINADAS ---
 
 
 def monto_a_letras(amount, currency_symbol):
@@ -121,15 +117,23 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     hash_comprobante = None
 
     # --- LÓGICA UNIFICADA DE CÁLCULO (V3) ---
-    # Esta sección ahora calcula los montos de la misma manera para ambos tipos de documento
-    total_gravado_acumulado_d = Decimal('0.00')
-    total_igv_acumulado_d = Decimal('0.00')
+    
+    productos_fuente_dict = [] # Usaremos dicts
 
-    productos_fuente = []
     if is_comprobante:
         payload = document_data.payload_enviado
         if not payload: raise ValueError("El comprobante no tiene payload.")
-        productos_fuente = payload.get('details', [])
+        
+        # Usar los 'details' del payload como fuente
+        productos_fuente_raw = payload.get('details', [])
+        # Mapear a un dict consistente
+        for item in productos_fuente_raw:
+            productos_fuente_dict.append({
+                "unidades": item.get('cantidad', 0),
+                "precio_unitario": item.get('mtoPrecioUnitario', 0), # Este es PU CON IGV (V3)
+                "descripcion": item.get('descripcion', '')
+            })
+
         # Extraer info para comprobante
         client = payload.get('client', {})
         company = payload.get('company', {})
@@ -150,8 +154,16 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         company_info_from_payload = company
         client_info_from_payload = client
         hash_comprobante = document_data.sunat_hash
+    
     else: # Es Cotización
-        productos_fuente = document_data.productos
+        # Mapear a un dict consistente
+        for item in document_data.productos:
+            productos_fuente_dict.append({
+                "unidades": item.unidades,
+                "precio_unitario": item.precio_unitario, # Este es PU CON IGV
+                "descripcion": item.descripcion
+            })
+
         # Extraer info para cotización
         simbolo = "S/" if document_data.moneda == "SOLES" else "$"
         moneda_texto = document_data.moneda
@@ -166,60 +178,25 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         ruc_para_cuadro = user.business_ruc or ''
 
     # --- BUCLE DE CÁLCULO UNIFICADO (V3) ---
-    for item in productos_fuente:
-        cantidad_val = 0
-        p_unit_val = Decimal('0')
-        descripcion_val = ""
+    # Usar la función centralizada
+    totals_v3 = calculate_cotizacion_totals_v3(productos_fuente_dict)
 
-        if is_comprobante:
-            # En comprobante, los valores vienen del payload
-            cantidad_val = item.get('cantidad', 0)
-            # PU con IGV viene en mtoPrecioUnitario
-            p_unit_val = to_decimal(item.get('mtoPrecioUnitario', 0))
-            descripcion_val = item.get('descripcion', '')
-        else:
-            # En cotización, vienen del objeto producto
-            cantidad_val = item.unidades
-            p_unit_val = to_decimal(item.precio_unitario) # Este ya tiene IGV
-            descripcion_val = item.descripcion
+    total_gravado_d = totals_v3['total_gravado_v3']
+    total_igv_d = totals_v3['total_igv_v3']
+    monto_total_d = totals_v3['monto_total_v3']
+    line_totals_v3_list = totals_v3['line_totals']
 
-        cantidad_d = to_decimal(cantidad_val)
-        precio_unitario_con_igv_d = p_unit_val
-
-        if not descripcion_val or cantidad_d <= 0 or precio_unitario_con_igv_d < 0:
-            print(f"WARN: Item inválido omitido: Desc={descripcion_val}")
-            continue
-
-        # Replicar lógica v3 de facturacion_service.py
-        valor_unitario_sin_igv_calculo_d = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(UNIT_PRICE_NO_IGV_CALC_PRECISION, rounding=ROUND_HALF_UP)
-        mto_valor_venta_linea_d = (cantidad_d * valor_unitario_sin_igv_calculo_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        igv_linea_d = (mto_valor_venta_linea_d * TASA_IGV).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        precio_total_linea_d = (mto_valor_venta_linea_d + igv_linea_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-        if cantidad_d == Decimal('0'):
-            mto_precio_unitario_display_d = Decimal('0.00')
-        else:
-            # Usar el total calculado V3 para derivar el PU con IGV a mostrar (puede variar mínimamente del original)
-            mto_precio_unitario_display_d = (precio_total_linea_d / cantidad_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-
-        # Acumular totales consistentes
-        total_gravado_acumulado_d += mto_valor_venta_linea_d
-        total_igv_acumulado_d += igv_linea_d
-
-        # Guardar datos para la tabla PDF usando los valores calculados V3
+    # Guardar datos para la tabla PDF usando los valores calculados V3
+    for i, item_dict in enumerate(productos_fuente_dict):
+        line_totals = line_totals_v3_list[i]
+        
         productos_para_tabla_data.append({
-            'descripcion': descripcion_val,
-            'cantidad': cantidad_val,
-            'p_unit_con_igv': mto_precio_unitario_display_d, # PU con IGV calculado V3
-            'igv_item': igv_linea_d,                 # IGV calculado V3
-            'precio_total_item': precio_total_linea_d   # Precio Total calculado V3
+            'descripcion': item_dict['descripcion'],
+            'cantidad': to_decimal(item_dict['unidades']), # Guardar como Decimal
+            'p_unit_con_igv': line_totals['mto_precio_unitario_con_igv'], # PU con IGV calculado V3
+            'igv_item': line_totals['igv_linea'],                 # IGV calculado V3
+            'precio_total_item': line_totals['precio_total_linea']   # Precio Total calculado V3
         })
-
-    # --- FIN BUCLE ---
-
-    # Totales generales usan la suma de los valores calculados V3
-    total_gravado_d = total_gravado_acumulado_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    total_igv_d = total_igv_acumulado_d.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
-    monto_total_d = (total_gravado_d + total_igv_d).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
     # --- FIN LÓGICA UNIFICADA ---
 
     # --- Construcción del PDF (Sin cambios visuales) ---
@@ -269,9 +246,14 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     productos_para_pdf = []
     for item_data in productos_para_tabla_data:
         # Usar 'body_center' para datos numéricos
+        # Formatear cantidad como entero si es un entero, si no, dejarlo
+        cantidad_str = str(item_data['cantidad'])
+        if item_data['cantidad'].remainder_near(Decimal('1')) == Decimal('0'):
+            cantidad_str = str(item_data['cantidad'].to_integral_value(rounding='ROUND_DOWN'))
+
         productos_para_pdf.append([
             Paragraph(item_data['descripcion'], body), # Izquierda
-            Paragraph(str(item_data['cantidad']), body_center), # Centrado
+            Paragraph(cantidad_str, body_center), # Centrado
             Paragraph(f"{simbolo} {item_data['p_unit_con_igv']:.2f}", body_center), # Centrado
             Paragraph(f"{simbolo} {item_data['igv_item']:.2f}", body_center), # Centrado
             Paragraph(f"{simbolo} {item_data['precio_total_item']:.2f}", body_center) # Centrado
@@ -434,4 +416,3 @@ def create_comprobante_pdf(comprobante: models.Comprobante, user: models.User):
     """Genera el PDF para un comprobante usando cálculos consistentes V3."""
     print("DEBUG: Generando PDF para COMPROBANTE v6 (Cálculo Unificado V3)...")
     return create_pdf_buffer(comprobante, user, 'comprobante')
-
