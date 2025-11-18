@@ -242,29 +242,29 @@ def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: m
                  print(f"WARN: Producto inválido omitido (cálculo V3 dio 0): ID={prod_dict['id']}")
                  continue
         
-        # Convertir a float para el payload JSON
+        # Convertir a float para el payload JSON, asegurando precisión
         details.append({
             "codProducto": f"P{prod_dict['id']}",
             "unidad": "NIU",
             "descripcion": clean_text_string(prod_dict['descripcion']),
-            "cantidad": float(to_decimal(prod_dict['unidades']).to_eng_string()),
-            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d.to_eng_string()), # VU sin IGV (alta precisión para UBL)
-            "mtoValorVenta": float(mto_valor_venta_linea_d.to_eng_string()), # VT línea sin IGV (2 dec) - CLAVE
-            "mtoBaseIgv": float(mto_valor_venta_linea_d.to_eng_string()), # Base IGV = mtoValorVenta
+            "cantidad": float(to_decimal(prod_dict['unidades'])), # No redondear cantidad
+            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d), # VU sin IGV (alta precisión para UBL)
+            "mtoValorVenta": float(mto_valor_venta_linea_d), # VT línea sin IGV (2 dec) - CLAVE
+            "mtoBaseIgv": float(mto_valor_venta_linea_d), # Base IGV = mtoValorVenta
             "porcentajeIgv": float(TASA_IGV * 100),
-            "igv": float(igv_linea_d.to_eng_string()), # IGV línea (2 dec)
+            "igv": float(igv_linea_d), # IGV línea (2 dec)
             "tipAfeIgv": 10,
-            "totalImpuestos": float(igv_linea_d.to_eng_string()), # Total impuestos línea
-            "mtoPrecioUnitario": float(mto_precio_unitario_d.to_eng_string()) # PU con IGV (2 dec)
+            "totalImpuestos": float(igv_linea_d), # Total impuestos línea
+            "mtoPrecioUnitario": float(mto_precio_unitario_d) # PU con IGV (2 dec)
         })
 
     if not details:
          raise FacturacionException("No hay productos válidos en la cotización para facturar.")
 
     # Convertir totales a float
-    mto_oper_gravadas = float(mto_oper_gravadas_final_d.to_eng_string())
-    mto_igv_total = float(mto_igv_final_d.to_eng_string())
-    mto_imp_venta_total = float(mto_imp_venta_final_d.to_eng_string())
+    mto_oper_gravadas = float(mto_oper_gravadas_final_d)
+    mto_igv_total = float(mto_igv_final_d)
+    mto_imp_venta_total = float(mto_imp_venta_final_d)
 
     tipo_moneda_api = "PEN" if cotizacion.moneda == "SOLES" else "USD"
     legend_value = monto_a_letras(mto_imp_venta_total, tipo_moneda_api)
@@ -358,29 +358,29 @@ def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect,
                  print(f"WARN: Producto inválido omitido (directo, cálculo V3 dio 0): Desc={prod.descripcion}")
                  continue
 
-        # Convertir a float para JSON
+        # Convertir a float para JSON, asegurando precisión
         details.append({
             "codProducto": f"DP{i+1}",
             "unidad": "NIU",
             "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(to_decimal(prod.unidades).to_eng_string()),
-            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d.to_eng_string()),
-            "mtoValorVenta": float(mto_valor_venta_linea_d.to_eng_string()),
-            "mtoBaseIgv": float(mto_valor_venta_linea_d.to_eng_string()),
+            "cantidad": float(to_decimal(prod.unidades)),
+            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d),
+            "mtoValorVenta": float(mto_valor_venta_linea_d),
+            "mtoBaseIgv": float(mto_valor_venta_linea_d),
             "porcentajeIgv": float(TASA_IGV * 100),
-            "igv": float(igv_linea_d.to_eng_string()),
+            "igv": float(igv_linea_d),
             "tipAfeIgv": 10,
-            "totalImpuestos": float(igv_linea_d.to_eng_string()),
-            "mtoPrecioUnitario": float(mto_precio_unitario_d.to_eng_string())
+            "totalImpuestos": float(igv_linea_d),
+            "mtoPrecioUnitario": float(mto_precio_unitario_d)
         })
 
     if not details:
          raise FacturacionException("No hay productos válidos en la factura directa.")
 
     # Convertir Totales Globales Finales a float
-    mto_oper_gravadas = float(mto_oper_gravadas_final_d.to_eng_string())
-    mto_igv_total = float(mto_igv_final_d.to_eng_string())
-    mto_imp_venta_total = float(mto_imp_venta_final_d.to_eng_string())
+    mto_oper_gravadas = float(mto_oper_gravadas_final_d)
+    mto_igv_total = float(mto_igv_final_d)
+    mto_imp_venta_total = float(mto_imp_venta_final_d)
 
     tipo_moneda_api = "PEN" if factura_data.moneda == "SOLES" else "USD"
     legend_value = monto_a_letras(mto_imp_venta_total, tipo_moneda_api)
@@ -863,7 +863,7 @@ def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user:
         bienes_corregidos.append(bien_dict)
 
     if not bienes_corregidos:
-         raise FacturacionException("No hay bienes válidos para incluir en la guía.")
+         raise FacturacionException("No hay bienes válidas para incluir en la guía.")
 
 
     company_data = {

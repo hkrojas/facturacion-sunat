@@ -246,10 +246,14 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     productos_para_pdf = []
     for item_data in productos_para_tabla_data:
         # Usar 'body_center' para datos numéricos
-        # Formatear cantidad como entero si es un entero, si no, dejarlo
-        cantidad_str = str(item_data['cantidad'])
-        if item_data['cantidad'].remainder_near(Decimal('1')) == Decimal('0'):
-            cantidad_str = str(item_data['cantidad'].to_integral_value(rounding='ROUND_DOWN'))
+        # CORREGIDO: Formatear cantidad evitando notación científica
+        cantidad_decimal = item_data['cantidad']
+        # Verifica si es entero (ej. 3500.00 -> 3500)
+        if cantidad_decimal % 1 == 0:
+             cantidad_str = str(int(cantidad_decimal))
+        else:
+             # Formato fijo float (f), sin notación científica, removiendo ceros y puntos extra al final
+             cantidad_str = "{:f}".format(cantidad_decimal).rstrip('0').rstrip('.')
 
         productos_para_pdf.append([
             Paragraph(item_data['descripcion'], body), # Izquierda
