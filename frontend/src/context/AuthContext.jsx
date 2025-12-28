@@ -1,60 +1,76 @@
-import React, { createContext, useState, useEffect } from 'react';
-import { API_URL } from '../config'; // Importamos la URL desde el archivo de configuración central
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
-export const AuthContext = createContext();
-
-// Eliminamos la definición de API_URL de este archivo.
+export const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-    const [token, setToken] = useState(localStorage.getItem('token'));
-    const [user, setUser] = useState(null);
-    const [loading, setLoading] = useState(true);
+  // Inicialización segura: Si falla al leer, inicia como null
+  const [user, setUser] = useState(() => {
+    try {
+      const storedUser = localStorage.getItem('user');
+      return storedUser ? JSON.parse(storedUser) : null;
+    } catch (e) {
+      console.warn("Error al leer usuario, limpiando...", e);
+      localStorage.removeItem('user');
+      return null;
+    }
+  });
 
-    useEffect(() => {
-        const fetchUser = async () => {
-            if (token) {
-                try {
-                    // Usamos la API_URL importada
-                    const response = await fetch(`${API_URL}/users/me/`, {
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    if (!response.ok) {
-                        // Si el token es inválido, lo limpiamos
-                        throw new Error('Token inválido o expirado');
-                    }
-                    const data = await response.json();
-                    setUser(data);
-                } catch (error) {
-                    console.error("Auth Error:", error.message);
-                    localStorage.removeItem('token');
-                    setToken(null);
-                    setUser(null);
-                }
-            }
-            setLoading(false);
-        };
-        fetchUser();
-    }, [token]);
+  const [token, setToken] = useState(() => localStorage.getItem('token'));
+  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
+  const [isLoading, setIsLoading] = useState(true);
 
-    const login = (newToken) => {
-        localStorage.setItem('token', newToken);
-        setToken(newToken);
-        setLoading(true); // Forzar recarga de datos de usuario
-    };
+  useEffect(() => {
+    // Simplemente verificamos si hay token para decidir el estado inicial
+    // No hacemos llamadas a API aquí para evitar bloqueos
+    const currentToken = localStorage.getItem('token');
+    if (currentToken) {
+      setIsAuthenticated(true);
+    } else {
+      setIsAuthenticated(false);
+      setUser(null);
+    }
+    // IMPORTANTE: Liberar la carga inmediatamente para mostrar la UI
+    setIsLoading(false);
+  }, []);
 
-    const logout = () => {
-        localStorage.removeItem('token');
-        setToken(null);
-        setUser(null);
-    };
+  const login = (newToken, userData = null) => {
+    localStorage.setItem('token', newToken);
+    setToken(newToken);
+    setIsAuthenticated(true);
+    if (userData) {
+      setUser(userData);
+      localStorage.setItem('user', JSON.stringify(userData));
+    }
+  };
 
-    const updateUser = (updatedUserData) => {
-        setUser(prevUser => ({...prevUser, ...updatedUserData}));
-    };
+  const logout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setToken(null);
+    setUser(null);
+    setIsAuthenticated(false);
+    // Usamos window.location para forzar una limpieza completa de memoria
+    window.location.href = '/login';
+  };
 
-    return (
-        <AuthContext.Provider value={{ token, user, login, logout, loading, updateUser }}>
-            {children}
-        </AuthContext.Provider>
-    );
+  return (
+    <AuthContext.Provider value={{ 
+      user, 
+      token, 
+      isAuthenticated, 
+      isLoading, 
+      login, 
+      logout 
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth debe ser usado dentro de un AuthProvider');
+  }
+  return context;
 };

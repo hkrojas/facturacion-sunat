@@ -1,19 +1,21 @@
-import React, { useContext } from 'react';
-import { Navigate } from 'react-router-dom';
-import { AuthContext } from '../context/AuthContext';
+import React from 'react';
+import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import LoadingSpinner from './LoadingSpinner';
 
-const ProtectedRoute = ({ children }) => {
-    const { token, loading } = useContext(AuthContext);
+const ProtectedRoute = () => {
+  const { isAuthenticated, isLoading } = useAuth();
 
-    if (loading) {
-        return <div>Cargando...</div>;
-    }
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <LoadingSpinner className="w-10 h-10 text-indigo-600" />
+      </div>
+    );
+  }
 
-    if (!token) {
-        return <Navigate to="/login" />;
-    }
-
-    return children;
+  // Si no está autenticado, redirigir al login
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
 export default ProtectedRoute;

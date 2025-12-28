@@ -1,47 +1,36 @@
-# backend/pdf_generator.py
 import io
 import os
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import Table, TableStyle, SimpleDocTemplate, Image, Spacer, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 from reportlab.lib.units import inch
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import models
-import qrcode # <-- IMPORTACIÓN DE QRCODE AÑADIDA
-from num2words import num2words # <-- IMPORTACIÓN DE NUM2WORDS AÑADIDA
-# --- IMPORTACIONES AÑADIDAS ---
-from decimal import Decimal, ROUND_HALF_UP, getcontext
-import traceback # Para mejor logging de errores
+import qrcode
+from num2words import num2words
 
-# --- IMPORTACIÓN CENTRALIZADA ---
-# Importar la lógica de cálculo desde el nuevo archivo
-from calculations import ( # <-- CORREGIDO: sin 'core.'
+from decimal import Decimal, ROUND_HALF_UP, getcontext
+import traceback
+
+from calculations import (
     to_decimal,
-    get_line_totals_v3,
     calculate_cotizacion_totals_v3,
-    TOTAL_PRECISION
+    TOTAL_PRECISION,
 )
 
-# Ajustar precisión global
 getcontext().prec = 50
 
-# --- CONSTANTES DE CÁLCULO (ELIMINADAS) ---
-# ... (Movidas a calculations.py) ...
-# --- FIN DE CONSTANTES ELIMINADAS ---
-
-
 def monto_a_letras(amount, currency_symbol):
-    """
-    Convierte un monto numérico a su representación en palabras.
-    """
+    """Convierte un monto numérico a su representación en palabras."""
     currency_name = "SOLES" if currency_symbol == "S/" else "DÓLARES AMERICANOS"
     try:
         amount_decimal = to_decimal(amount).quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
         integer_part_decimal = amount_decimal.to_integral_value(rounding='ROUND_DOWN')
-        if integer_part_decimal < 0: integer_part_decimal = Decimal('0')
+        if integer_part_decimal < 0:
+            integer_part_decimal = Decimal('0')
         integer_part = int(integer_part_decimal)
 
         decimal_part_num = abs(amount_decimal) % 1
@@ -53,13 +42,21 @@ def monto_a_letras(amount, currency_symbol):
 
     except (ValueError, TypeError, Exception) as e:
         print(f"Error en monto_a_letras: {e}, amount: {amount}")
-        traceback.print_exc()
         return "MONTO INVÁLIDO"
 
     text_integer = num2words(integer_part, lang='es').upper()
-
     return f"SON: {text_integer} CON {decimal_part}/100 {currency_name}"
 
+def obtener_etiqueta_tipo_doc(codigo):
+    """Mapea el código de SUNAT al nombre legible (RUC, DNI, etc)."""
+    mapeo = {
+        "6": "RUC",
+        "1": "DNI",
+        "4": "C.E.",
+        "7": "PASAPORTE",
+        "0": "DOC.TRIB.NO.DOM."
+    }
+    return mapeo.get(str(codigo), "DOC")
 
 def create_pdf_buffer(document_data, user: models.User, document_type: str):
     buffer = io.BytesIO()
@@ -78,13 +75,22 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     )
 
     styles = getSampleStyleSheet()
-    header_text_style = ParagraphStyle(name='HeaderText', parent=styles['Normal'], alignment=TA_CENTER, fontSize=11)
-    header_bold_style = ParagraphStyle(name='HeaderBold', parent=header_text_style, fontName='Helvetica-Bold')
+    header_text_style = ParagraphStyle(
+        name='HeaderText',
+        parent=styles['Normal'],
+        alignment=TA_CENTER,
+        fontSize=11
+    )
+    header_bold_style = ParagraphStyle(
+        name='HeaderBold',
+        parent=header_text_style,
+        fontName='Helvetica-Bold'
+    )
+
     body = styles['Normal']
-    # Estilo 'body_center' para datos numéricos en tabla productos
     body_center = ParagraphStyle(name='BodyCenter', parent=body, alignment=TA_CENTER)
     body_bold = ParagraphStyle(name='BodyBold', parent=body, fontName='Helvetica-Bold')
-    # Estilos para totales (etiquetas a la derecha, valores centrados)
+
     body_total_label_right = ParagraphStyle(name='BodyTotalLabelRight', parent=body, alignment=TA_RIGHT)
     body_total_value_center = ParagraphStyle(name='BodyTotalValueCenter', parent=body, alignment=TA_CENTER)
     body_bold_total_label_right = ParagraphStyle(name='BodyBoldTotalLabelRight', parent=body_bold, alignment=TA_RIGHT)
@@ -117,24 +123,22 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     hash_comprobante = None
 
     # --- LÓGICA UNIFICADA DE CÁLCULO (V3) ---
-    
-    productos_fuente_dict = [] # Usaremos dicts
+    productos_fuente_dict = []  # List[dict]
+    payload = None  # para que exista incluso fuera del branch de comprobante
 
     if is_comprobante:
         payload = document_data.payload_enviado
-        if not payload: raise ValueError("El comprobante no tiene payload.")
-        
-        # Usar los 'details' del payload como fuente
+        if not payload:
+            raise ValueError("El comprobante no tiene payload.")
+
         productos_fuente_raw = payload.get('details', [])
-        # Mapear a un dict consistente
         for item in productos_fuente_raw:
             productos_fuente_dict.append({
                 "unidades": item.get('cantidad', 0),
-                "precio_unitario": item.get('mtoPrecioUnitario', 0), # Este es PU CON IGV (V3)
+                "precio_unitario": item.get('mtoPrecioUnitario', 0),  # PU CON IGV (V3)
                 "descripcion": item.get('descripcion', '')
             })
 
-        # Extraer info para comprobante
         client = payload.get('client', {})
         company = payload.get('company', {})
         simbolo = "S/" if payload.get('tipoMoneda') == "PEN" else "$"
@@ -144,41 +148,64 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         try:
             fecha_dt = datetime.fromisoformat(payload.get('fechaEmision').replace('Z', '+00:00'))
             fecha_emision = fecha_dt.strftime("%d/%m/%Y")
-        except: fecha_emision = "Inválida"
+        except Exception:
+            fecha_emision = "Inválida"
+
         fecha_vencimiento = fecha_emision
         nombre_cliente = client.get('rznSocial', '')
-        tipo_doc_cliente_str = "RUC" if client.get('tipoDoc') == "6" else "DNI"
+        tipo_doc_cliente_str = obtener_etiqueta_tipo_doc(client.get('tipoDoc', ''))
         nro_doc_cliente = str(client.get('numDoc', ''))
-        direccion_cliente = client.get('address', {}).get('direccion', '')
+        direccion_cliente = str(client.get('address', {}).get('direccion', '')).replace('\n', '<br/>')
         ruc_para_cuadro = company.get('ruc') or (user.business_ruc or '')
         company_info_from_payload = company
         client_info_from_payload = client
-        hash_comprobante = document_data.sunat_hash
-    
-    else: # Es Cotización
-        # Mapear a un dict consistente
-        for item in document_data.productos:
+        hash_comprobante = getattr(document_data, "sunat_hash", None)
+
+    else:
+        # Es Cotización (tu estructura real)
+        items = getattr(document_data, "items", [])
+        for item in items:
             productos_fuente_dict.append({
-                "unidades": item.unidades,
-                "precio_unitario": item.precio_unitario, # Este es PU CON IGV
-                "descripcion": item.descripcion
+                "unidades": getattr(item, "cantidad", 0),
+                "precio_unitario": getattr(item, "precio_unitario", 0),  # PU CON IGV (V3)
+                "descripcion": getattr(item, "descripcion", "")
             })
 
-        # Extraer info para cotización
-        simbolo = "S/" if document_data.moneda == "SOLES" else "$"
-        moneda_texto = document_data.moneda
+        simbolo = "S/" if getattr(document_data, "moneda", "PEN") == "PEN" else "$"
+        moneda_texto = "SOLES" if getattr(document_data, "moneda", "PEN") == "PEN" else "DÓLARES"
         doc_title_str = "COTIZACIÓN"
-        doc_number_str = f"N° {document_data.numero_cotizacion}"
-        fecha_emision = document_data.fecha_creacion.strftime("%d/%m/%Y")
-        fecha_vencimiento = (document_data.fecha_creacion + relativedelta(months=1)).strftime("%d/%m/%Y")
-        nombre_cliente = document_data.nombre_cliente
-        tipo_doc_cliente_str = document_data.tipo_documento
-        nro_doc_cliente = document_data.nro_documento
-        direccion_cliente = document_data.direccion_cliente
+        serie = getattr(document_data, "serie", "COT")
+        correlativo = getattr(document_data, "correlativo", 0)
+        doc_number_str = f"N° {document_data.serie}-{document_data.correlativo:08d}"
+
+        fecha_creacion = getattr(document_data, "fecha_creacion", None) or getattr(document_data, "fecha_emision", None) or getattr(document_data, "created_at", None)
+        if fecha_creacion:
+            try:
+                fecha_emision = fecha_creacion.strftime("%d/%m/%Y")
+                fecha_vencimiento = (fecha_creacion + relativedelta(months=1)).strftime("%d/%m/%Y")
+            except Exception:
+                fecha_emision = "Inválida"
+                fecha_vencimiento = "Inválida"
+        else:
+            fecha_emision = datetime.now().strftime("%d/%m/%Y")
+            fecha_vencimiento = (datetime.now() + relativedelta(months=1)).strftime("%d/%m/%Y")
+
+        cliente = getattr(document_data, "cliente", None)
+        if cliente:
+            nombre_cliente = getattr(cliente, "razon_social", "") or getattr(cliente, "nombre", "") or ""
+            tipo_doc_cliente_str = obtener_etiqueta_tipo_doc(getattr(cliente, "tipo_documento", "1"))
+            nro_doc_cliente = str(getattr(cliente, "numero_documento", "") or "")
+            # IMPORTANTE: Procesar saltos de línea en dirección
+            direccion_cliente = str(getattr(cliente, "direccion", "") or "").replace('\n', '<br/>')
+        else:
+            nombre_cliente = ""
+            tipo_doc_cliente_str = ""
+            nro_doc_cliente = ""
+            direccion_cliente = ""
+
         ruc_para_cuadro = user.business_ruc or ''
 
-    # --- BUCLE DE CÁLCULO UNIFICADO (V3) ---
-    # Usar la función centralizada
+    # --- Cálculo V3 centralizado ---
     totals_v3 = calculate_cotizacion_totals_v3(productos_fuente_dict)
 
     total_gravado_d = totals_v3['total_gravado_v3']
@@ -186,41 +213,48 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     monto_total_d = totals_v3['monto_total_v3']
     line_totals_v3_list = totals_v3['line_totals']
 
-    # Guardar datos para la tabla PDF usando los valores calculados V3
     for i, item_dict in enumerate(productos_fuente_dict):
         line_totals = line_totals_v3_list[i]
-        
         productos_para_tabla_data.append({
-            'descripcion': item_dict['descripcion'],
-            'cantidad': to_decimal(item_dict['unidades']), # Guardar como Decimal
-            'p_unit_con_igv': line_totals['mto_precio_unitario_con_igv'], # PU con IGV calculado V3
-            'igv_item': line_totals['igv_linea'],                 # IGV calculado V3
-            'precio_total_item': line_totals['precio_total_linea']   # Precio Total calculado V3
+            # IMPORTANTE: Procesar saltos de línea en descripción
+            'descripcion': str(item_dict['descripcion']).replace('\n', '<br/>'),
+            'cantidad': to_decimal(item_dict['unidades']),
+            'p_unit_con_igv': line_totals['mto_precio_unitario_con_igv'],
+            'igv_item': line_totals['igv_linea'],
+            'precio_total_item': line_totals['precio_total_linea']
         })
-    # --- FIN LÓGICA UNIFICADA ---
 
-    # --- Construcción del PDF (Sin cambios visuales) ---
-
+    # --- Construcción del PDF (DISEÑO PROFESIONAL) ---
     logo = ""
     if user.logo_filename and os.path.exists(f"logos/{user.logo_filename}"):
-        try: logo = Image(f"logos/{user.logo_filename}", width=151, height=76)
-        except Exception: logo = ""
+        try:
+            logo = Image(f"logos/{user.logo_filename}", width=151, height=76)
+        except Exception:
+            logo = ""
 
     business_name_p = Paragraph(user.business_name or "Nombre del Negocio", header_bold_style)
-    business_address_p = Paragraph(user.business_address or "Dirección no especificada", header_text_style)
+    business_address_p = Paragraph(str(user.business_address or "Dirección no especificada").replace('\n', '<br/>'), header_text_style)
     contact_info_p = Paragraph(f"{(user.email or '').strip()}<br/>{(user.business_phone or '').strip()}", header_text_style)
     ruc_p = Paragraph(f"RUC {ruc_para_cuadro}", header_text_style)
     titulo_p = Paragraph(doc_title_str.replace("ELECTRÓNICA", "<br/>ELECTRÓNICA"), header_bold_style)
     numero_p = Paragraph(doc_number_str, header_bold_style)
 
-    data_principal = [[logo, business_name_p, ruc_p],
-                      ["", business_address_p, titulo_p],
-                      ["", contact_info_p, numero_p]]
-    tabla_principal = Table(data_principal,colWidths=[ancho_total*0.3,ancho_total*0.5,ancho_total*0.2])
-    tabla_principal.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                          ('SPAN',(0,0),(0,-1)),('FONTSIZE',(0,0),(-1,-1),11),
-                                          ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-                                          ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+    data_principal = [
+        [logo, business_name_p, ruc_p],
+        ["", business_address_p, titulo_p],
+        ["", contact_info_p, numero_p]
+    ]
+    tabla_principal = Table(data_principal, colWidths=[ancho_total * 0.3, ancho_total * 0.5, ancho_total * 0.2])
+    tabla_principal.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('SPAN', (0, 0), (0, -1)),
+        ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ('LEFTPADDING', (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0)
+    ]))
 
     nombre_cliente_p = Paragraph(nombre_cliente, body)
     direccion_cliente_p = Paragraph(direccion_cliente, body)
@@ -231,40 +265,50 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     moneda_label_p = Paragraph(" Moneda:", body)
     moneda_value_p = Paragraph(moneda_texto, body)
 
-    data_cliente = [["Señores:", nombre_cliente_p, emision_label_p, emision_value_p],
-                      [f"{tipo_doc_cliente_str}:", nro_doc_cliente, vencimiento_label_p, vencimiento_value_p],
-                      ["Dirección:", direccion_cliente_p, moneda_label_p, moneda_value_p]]
-    tabla_cliente = Table(data_cliente,colWidths=[ancho_total*0.1,ancho_total*0.6,ancho_total*0.15,ancho_total*0.15])
-    tabla_cliente.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'LEFT'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                        ('FONTSIZE',(0,0),(-1,-1),10),
-                                        ('LINEABOVE',(0,0),(-1,0),1.5,color_principal),
-                                        ('LINEBELOW',(0,-1),(-1,-1),1.5,color_principal),
-                                        ('LEFTPADDING',(0,0),(-1,-1),3),('RIGHTPADDING',(0,0),(-1,-1),3),
-                                        ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5)]))
+    data_cliente = [
+        ["Señores:", nombre_cliente_p, emision_label_p, emision_value_p],
+        [f"{tipo_doc_cliente_str}:", nro_doc_cliente, vencimiento_label_p, vencimiento_value_p],
+        ["Dirección:", direccion_cliente_p, moneda_label_p, moneda_value_p]
+    ]
+    tabla_cliente = Table(
+        data_cliente,
+        colWidths=[ancho_total * 0.1, ancho_total * 0.6, ancho_total * 0.15, ancho_total * 0.15]
+    )
+    tabla_cliente.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('LINEABOVE', (0, 0), (-1, 0), 1.5, color_principal),
+        ('LINEBELOW', (0, -1), (-1, -1), 1.5, color_principal),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5)
+    ]))
 
-    # --- Generación de filas de tabla de productos UNIFICADA ---
+    # --- Tabla productos ---
     productos_para_pdf = []
     for item_data in productos_para_tabla_data:
-        # Usar 'body_center' para datos numéricos
-        # CORREGIDO: Formatear cantidad evitando notación científica
         cantidad_decimal = item_data['cantidad']
-        # Verifica si es entero (ej. 3500.00 -> 3500)
         if cantidad_decimal % 1 == 0:
-             cantidad_str = str(int(cantidad_decimal))
+            cantidad_str = str(int(cantidad_decimal))
         else:
-             # Formato fijo float (f), sin notación científica, removiendo ceros y puntos extra al final
-             cantidad_str = "{:f}".format(cantidad_decimal).rstrip('0').rstrip('.')
+            cantidad_str = "{:f}".format(cantidad_decimal).rstrip('0').rstrip('.')
 
         productos_para_pdf.append([
-            Paragraph(item_data['descripcion'], body), # Izquierda
-            Paragraph(cantidad_str, body_center), # Centrado
-            Paragraph(f"{simbolo} {item_data['p_unit_con_igv']:.2f}", body_center), # Centrado
-            Paragraph(f"{simbolo} {item_data['igv_item']:.2f}", body_center), # Centrado
-            Paragraph(f"{simbolo} {item_data['precio_total_item']:.2f}", body_center) # Centrado
+            Paragraph(item_data['descripcion'], body),
+            Paragraph(cantidad_str, body_center),
+            Paragraph(f"{simbolo} {item_data['p_unit_con_igv']:.2f}", body_center),
+            Paragraph(f"{simbolo} {item_data['igv_item']:.2f}", body_center),
+            Paragraph(f"{simbolo} {item_data['precio_total_item']:.2f}", body_center)
         ])
-    # --- FIN Generación unificada ---
 
-    centered_header = ParagraphStyle(name='CenteredHeader', parent=body_bold, alignment=TA_CENTER, textColor=colors.white)
+    centered_header = ParagraphStyle(
+        name='CenteredHeader',
+        parent=body_bold,
+        alignment=TA_CENTER,
+        textColor=colors.white
+    )
     header_productos = [
         Paragraph("Descripción", centered_header),
         Paragraph("Cantidad", centered_header),
@@ -274,114 +318,125 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     ]
     data_productos = [header_productos] + productos_para_pdf
 
-    tabla_productos = Table(data_productos,
-                            colWidths=[ancho_total*0.4,ancho_total*0.15,ancho_total*0.15,ancho_total*0.15,ancho_total*0.15],
-                            repeatRows=1)
-    # --- ESTILO CORREGIDO de tabla_productos ---
+    tabla_productos = Table(
+        data_productos,
+        colWidths=[
+            ancho_total * 0.4,
+            ancho_total * 0.15,
+            ancho_total * 0.15,
+            ancho_total * 0.15,
+            ancho_total * 0.15
+        ],
+        repeatRows=1
+    )
     tabla_productos.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('BACKGROUND',(0,0),(-1,0),color_principal),
-        ('LINEBELOW',(0,-1),(-1,-1),1.5,color_principal),
-        ('TOPPADDING',(0,0),(-1,-1),5),
-        ('BOTTOMPADDING',(0,0),(-1,-1),5),
-        # --- Aplicar centrado a columnas 1 a 4 ---
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BACKGROUND', (0, 0), (-1, 0), color_principal),
+        ('LINEBELOW', (0, -1), (-1, -1), 1.5, color_principal),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
         ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
     ]))
 
-    # --- Totales (usar valores Decimal correctos V3) ---
+    # --- Totales ---
     data_total = [
         [Paragraph("Total Gravado", body_total_label_right), Paragraph(f"{simbolo} {total_gravado_d:.2f}", body_total_value_center)],
         [Paragraph("Total IGV ", body_total_label_right), Paragraph(f"{simbolo} {total_igv_d:.2f}", body_total_value_center)],
         [Paragraph("Importe Total", body_bold_total_label_right), Paragraph(f"{simbolo} {monto_total_d:.2f}", body_bold_total_value_center)]
     ]
-    tabla_total = Table(data_total, colWidths=[ancho_total*0.85,ancho_total*0.15])
-    # --- ESTILO ORIGINAL de tabla_total ---
+    tabla_total = Table(data_total, colWidths=[ancho_total * 0.85, ancho_total * 0.15])
     tabla_total.setStyle(TableStyle([
-        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('FONTNAME',(0,2),(1,2),'Helvetica-Bold'),
-        ('TOPPADDING',(0,0),(-1,-1),5),
-        ('BOTTOMPADDING',(0,0),(-1,-1),5),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 2), (1, 2), 'Helvetica-Bold'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
     ]))
 
-    # --- Monto en letras (usa monto_total_d V3) ---
+    # --- Monto en letras ---
     monto_en_letras_str = monto_a_letras(monto_total_d, simbolo)
     centered_bold_style = ParagraphStyle(name='CenteredBold', parent=body_bold, alignment=TA_CENTER)
     monto_letras_p = Paragraph(monto_en_letras_str, centered_bold_style)
-    # --- ESTILO ORIGINAL de tabla_monto ---
     monto_numeros_p = Paragraph(f"IMPORTE TOTAL A PAGAR {simbolo} {monto_total_d:.2f}", centered_bold_style)
+
     tabla_monto = Table([[monto_numeros_p], [monto_letras_p]], colWidths=[ancho_total])
-    tabla_monto.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                      ('LINEABOVE',(0,0),(-1,0),1.5,color_principal),
-                                      ('LINEBELOW',(0,-1),(-1,-1),1.5,color_principal),
-                                      ('TOPPADDING',(0,0),(0,0),6),('BOTTOMPADDING',(0,0),(0,0),2),
-                                      ('TOPPADDING',(0,1),(0,1),2),('BOTTOMPADDING',(0,1),(0,1),6)]))
+    tabla_monto.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LINEABOVE', (0, 0), (-1, 0), 1.5, color_principal),
+        ('LINEBELOW', (0, -1), (-1, -1), 1.5, color_principal),
+        ('TOPPADDING', (0, 0), (0, 0), 6),
+        ('BOTTOMPADDING', (0, 0), (0, 0), 2),
+        ('TOPPADDING', (0, 1), (0, 1), 2),
+        ('BOTTOMPADDING', (0, 1), (0, 1), 6)
+    ]))
 
+    # --- PIE DE PÁGINA: QR E INFORMACIÓN BANCARIA ---
+    qr_data = f"{ruc_para_cuadro}|{document_type}|{getattr(document_data, 'serie', '000')}|{getattr(document_data, 'correlativo', '0')}|{total_igv_d}|{monto_total_d}|{fecha_emision}|{getattr(document_data.cliente, 'tipo_documento', '6')}|{nro_doc_cliente}|"
+    qr_img = qrcode.make(qr_data)
+    qr_buffer = io.BytesIO()
+    qr_img.save(qr_buffer, format='PNG')
+    qr_buffer.seek(0)
+    qr_image_obj = Image(qr_buffer, width=1.6 * inch, height=1.6 * inch)
 
-    # --- Footer y Final Elements (sin cambios lógicos) ---
-    footer_elements = []
+    # Tabla para centrar el QR al medio
+    t_qr_centered = Table([[qr_image_obj]], colWidths=[ancho_total])
+    t_qr_centered.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+
+    # Párrafo de datos bancarios
+    bank_info_text = "<b>Datos para la Transferencia</b><br/>"
+    if getattr(user, "business_name", None):
+        bank_info_text += f"Beneficiario: {str(user.business_name).upper()}<br/><br/>"
+
+    if getattr(user, "bank_accounts", None) and isinstance(user.bank_accounts, list):
+        for account in user.bank_accounts:
+            banco = account.get('banco', '')
+            tipo_cuenta = account.get('tipo_cuenta', 'Cta Ahorro')
+            moneda = account.get('moneda', 'Soles')
+            cuenta = account.get('cuenta', '')
+            cci = account.get('cci', '')
+            if banco:
+                bank_info_text += f"<b>{banco}</b><br/>"
+                label_cuenta = f"Cuenta Detracción en {moneda}" if 'nación' in banco.lower() else f"{tipo_cuenta} en {moneda}"
+                if cuenta and cci:
+                    bank_info_text += f"{label_cuenta}: {cuenta} CCI: {cci}<br/>"
+                elif cuenta:
+                    bank_info_text += f"{label_cuenta}: {cuenta}<br/>"
+                bank_info_text += "<br/>"
+
+    bank_info_p = Paragraph(bank_info_text, body)
+
+    # --- Footer condicional (Notas) con procesamiento de saltos de línea ---
+    footer_notes = []
     if not is_comprobante:
-        note_1_color = colors.HexColor(user.pdf_note_1_color or "#FF0000")
+        note_1_color = colors.HexColor(getattr(user, "pdf_note_1_color", None) or "#FF0000")
         style_red_bold = ParagraphStyle(name='RedBold', parent=body, textColor=note_1_color, fontName='Helvetica-Bold')
-        terminos_1 = Paragraph(user.pdf_note_1 or "", style_red_bold)
-        terminos_2 = Paragraph(user.pdf_note_2 or "", body)
-        bank_info_text = "<b>Datos para la Transferencia</b><br/>"
-        if user.business_name: bank_info_text += f"Beneficiario: {user.business_name.upper()}<br/><br/>"
-        if user.bank_accounts and isinstance(user.bank_accounts, list):
-            for account in user.bank_accounts:
-                banco = account.get('banco','')
-                tipo_cuenta = account.get('tipo_cuenta','Cta Ahorro')
-                moneda = account.get('moneda','Soles')
-                cuenta = account.get('cuenta','')
-                cci = account.get('cci','')
-                if banco:
-                    bank_info_text += f"<b>{banco}</b><br/>"
-                    label_cuenta = f"Cuenta Detracción en {moneda}" if 'nación' in banco.lower() else f"{tipo_cuenta} en {moneda}"
-                    if cuenta and cci: bank_info_text += f"{label_cuenta}: {cuenta} CCI: {cci}<br/>"
-                    elif cuenta: bank_info_text += f"{label_cuenta}: {cuenta}<br/>"
-                    bank_info_text += "<br/>"
-        banco_info = Paragraph(bank_info_text, body)
-        footer_elements = [Spacer(1, 20), terminos_1, Spacer(1, 5), terminos_2, Spacer(1, 12), banco_info]
+        
+        # IMPORTANTE: Convertir saltos de línea (\n) a etiquetas HTML (<br/>)
+        note_1_text = str(getattr(user, "pdf_note_1", "") or "").replace('\n', '<br/>')
+        note_2_text = str(getattr(user, "pdf_note_2", "") or "").replace('\n', '<br/>')
+        
+        footer_notes.append(Paragraph(note_1_text, style_red_bold))
+        footer_notes.append(Spacer(1, 5))
+        footer_notes.append(Paragraph(note_2_text, body))
+        footer_notes.append(Spacer(1, 10))
 
-    final_elements = []
-    if is_comprobante and hash_comprobante:
-        try:
-            qr_data = [
-                str(company_info_from_payload.get('ruc', '')), str(payload.get('tipoDoc', '')),
-                str(payload.get('serie', '')), str(payload.get('correlativo', '')),
-                f"{to_decimal(payload.get('mtoIGV', 0)):.2f}",
-                f"{to_decimal(payload.get('mtoImpVenta', 0)):.2f}",
-                datetime.fromisoformat(payload.get('fechaEmision').replace('Z', '+00:00')).strftime("%Y-%m-%d"),
-                str(client_info_from_payload.get('tipoDoc', '')), str(client_info_from_payload.get('numDoc', ''))
-            ]
-            if payload.get('tipoDoc') == '01' and hash_comprobante:
-                 qr_data.append(str(hash_comprobante))
-
-            qr_string = "|".join(qr_data)
-
-            qr_img = qrcode.make(qr_string, box_size=4, border=1)
-            qr_buffer = io.BytesIO()
-            qr_img.save(qr_buffer, format='PNG')
-            qr_buffer.seek(0)
-            qr_image_obj = Image(qr_buffer, width=1.5*inch, height=1.5*inch)
-            hash_p = Paragraph(f"Hash: {hash_comprobante}", hash_style)
-            tabla_qr_hash = Table([[qr_image_obj], [hash_p]],colWidths=[ancho_total])
-            tabla_qr_hash.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                                ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
-
-            final_elements.append(Spacer(1, 10))
-            final_elements.append(tabla_qr_hash)
-        except Exception as qr_err:
-             print(f"WARN: Error al generar QR: {qr_err}")
-
+    final_legal = []
     if is_comprobante:
-        legal_text = f"Representación Impresa de la <b>{doc_title_str}</b>. El usuario puede consultar su validez en SUNAT Virtual: www.sunat.gob.pe, en Operaciones sin Clave SOL / Consulta de validez del CPE."
+        legal_text = (
+            f"Representación Impresa de la <b>{doc_title_str}</b>. "
+            "El usuario puede consultar su validez en SUNAT Virtual: www.sunat.gob.pe, "
+            "en Operaciones sin Clave SOL / Consulta de validez del CPE."
+        )
         legal_paragraph = Paragraph(legal_text, legal_text_style)
         tabla_legal = Table([[legal_paragraph]], colWidths=[ancho_total])
-        tabla_legal.setStyle(TableStyle([('BOX', (0, 0), (-1, -1), 1, colors.black),
-                                          ('TOPPADDING', (0, 0), (-1, -1), 5),
-                                          ('BOTTOMPADDING', (0, 0), (-1, -1), 5)]))
-        final_elements.append(Spacer(1, 10))
-        final_elements.append(tabla_legal)
+        tabla_legal.setStyle(TableStyle([
+            ('BOX', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5)
+        ]))
+        final_legal = [Spacer(1, 10), tabla_legal]
 
     def dibujar_rectangulo(canvas, doc_):
         canvas.saveState()
@@ -397,10 +452,9 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     elementos = [
         tabla_principal, Spacer(1, 20),
         tabla_cliente, Spacer(1, 20),
-        tabla_productos, tabla_total, tabla_monto,
-    ] + footer_elements + final_elements
+        tabla_productos, tabla_total, tabla_monto, Spacer(1, 15)
+    ] + footer_notes + [bank_info_p, Spacer(1, 15), t_qr_centered] + final_legal
 
-    # --- CONTROL DE ERRORES EN BUILD ---
     try:
         doc.build(elementos, onFirstPage=dibujar_rectangulo, onLaterPages=dibujar_rectangulo)
     except Exception as build_err:
@@ -412,11 +466,15 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     return buffer
 
 def create_cotizacion_pdf(cotizacion: models.Cotizacion, user: models.User):
-    """Genera el PDF para una cotización usando cálculos consistentes V3."""
-    print("DEBUG: Generando PDF para COTIZACIÓN v6 (Cálculo Unificado V3)...")
+    """Genera el PDF para una cotización usando cálculos V3."""
+    print("DEBUG: Generando PDF para COTIZACIÓN...")
     return create_pdf_buffer(cotizacion, user, 'cotizacion')
 
-def create_comprobante_pdf(comprobante: models.Comprobante, user: models.User):
+# Compatibilidad con main.py
+def generar_pdf_cotizacion(cotizacion: models.Cotizacion, user: models.User):
+    return create_cotizacion_pdf(cotizacion, user)
+
+def create_comprobante_pdf(comprobante, user: models.User):
     """Genera el PDF para un comprobante usando cálculos consistentes V3."""
-    print("DEBUG: Generando PDF para COMPROBANTE v6 (Cálculo Unificado V3)...")
+    print("DEBUG: Generando PDF para COMPROBANTE...")
     return create_pdf_buffer(comprobante, user, 'comprobante')

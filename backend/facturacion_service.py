@@ -1,995 +1,484 @@
-# backend/facturacion_service.py
 import requests
 import json
-import base64
-from datetime import datetime, timedelta, timezone, date
+import math
+from datetime import datetime
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from num2words import num2words # <-- IMPORTACIÓN DE NUM2WORDS AÑADIDA
-import traceback
-from typing import List, Optional
-# Aumentar la precisión de Decimal
-from decimal import Decimal, ROUND_HALF_UP, getcontext
-
-# Importaciones de módulos locales
+# Importaciones absolutas para evitar errores de ruta en main.py
 import models
-import security
 import schemas
 from config import settings
+from database import SessionLocal # Importamos SessionLocal para el mecanismo de autorescate
 
-# --- IMPORTACIÓN CENTRALIZADA ---
-# Importar la lógica de cálculo desde el nuevo archivo
-from calculations import ( # <-- CORREGIDO: sin 'core.'
-    to_decimal,
-    get_line_totals_v3,
-    calculate_cotizacion_totals_v3,
-    UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION,
-    TOTAL_PRECISION,
-    TASA_IGV,
-    FACTOR_IGV
-)
-
-
-# Ajustar la precisión global para operaciones con Decimal
-getcontext().prec = 50
+# ==========================================
+# SECCIÓN 0: CLASES Y FUNCIONES DE COMPATIBILIDAD (MAIN.PY)
+# ==========================================
 
 class FacturacionException(Exception):
-    """Excepción personalizada para errores de facturación."""
+    """Excepción personalizada para errores de facturación que main.py espera capturar."""
     pass
 
-# --- CONSTANTES ELIMINADAS ---
-# (Movidas a calculations.py)
-# UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = ...
-# UNIT_PRICE_NO_IGV_CALC_PRECISION = ...
-# TOTAL_PRECISION = ...
-# TASA_IGV = ...
-# FACTOR_IGV = ...
-# def to_decimal(value): ...
-# --- FIN CONSTANTES ELIMINADAS ---
+def get_apisperu_token(db: Session, user: models.User):
+    """
+    Obtiene el token de ApisPeru/Facturación.
+    Requerido por main.py. Prioriza token de usuario si existe, sino usa settings.
+    """
+    if hasattr(user, 'apisperu_token') and user.apisperu_token:
+        return user.apisperu_token
+    if hasattr(user, 'token_facturacion') and user.token_facturacion:
+        return user.token_facturacion
+    return settings.API_TOKEN
 
+# ==========================================
+# SECCIÓN 1: UTILITARIOS Y HELPERS (SUNAT)
+# ==========================================
 
-# --- FUNCIÓN DE LIMPIEZA ---
-def clean_text_string(text: str) -> str:
-    """Elimina espacios en blanco innecesarios y dobles espacios."""
-    if not isinstance(text, str):
-        return text
-    text = text.strip()
-    text = " ".join(text.split())
-    return text
+UNIDADES = {
+    0: "", 1: "UN", 2: "DOS", 3: "TRES", 4: "CUATRO", 5: "CINCO", 
+    6: "SEIS", 7: "SIETE", 8: "OCHO", 9: "NUEVE"
+}
+DECENAS = {
+    10: "DIEZ", 11: "ONCE", 12: "DOCE", 13: "TRECE", 14: "CATORCE", 15: "QUINCE",
+    20: "VEINTE", 30: "TREINTA", 40: "CUARENTA", 50: "CINCUENTA", 
+    60: "SESENTA", 70: "SETENTA", 80: "OCHENTA", 90: "NOVENTA"
+}
+CENTENAS = {
+    100: "CIEN", 200: "DOSCIENTOS", 300: "TRESCIENTOS", 400: "CUATROCIENTOS", 
+    500: "QUINIENTOS", 600: "SEISCIENTOS", 700: "SETECIENTOS", 
+    800: "OCHOCIENTOS", 900: "NOVECIENTOS"
+}
 
-# --- FUNCIÓN DE FECHA ---
-def format_date_for_api(dt: datetime) -> str:
-    """Formatea la fecha al formato ISO 8601 sin milisegundos y con timezone."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+def numero_a_letras(numero):
+    """Convierte un número a su representación en letras (para Leyendas SUNAT)"""
+    parte_entera = int(numero)
+    parte_decimal = int(round((numero - parte_entera) * 100))
+    letras = convert_number(parte_entera)
+    return f"SON: {letras} CON {parte_decimal:02d}/100 SOLES"
 
-    dt = dt.replace(microsecond=0)
-    iso_str = dt.isoformat()
+def convert_number(n):
+    if n == 0: return "CERO"
+    if n < 10: return UNIDADES[n]
+    if n < 20: return DECENAS.get(n, "DIECI" + UNIDADES[n-10])
+    if n < 30: return "VEINTI" + UNIDADES[n-20] if n > 20 else "VEINTE"
+    if n < 100: 
+        decena, unidad = divmod(n, 10)
+        return DECENAS[decena*10] + (" Y " + UNIDADES[unidad] if unidad > 0 else "")
+    if n < 1000:
+        if n == 100: return "CIEN"
+        centena, resto = divmod(n, 100)
+        return (CENTENAS[centena*100] if centena > 1 else "CIENTO") + (" " + convert_number(resto) if resto > 0 else "")
+    if n < 1000000:
+        miles, resto = divmod(n, 1000)
+        return (convert_number(miles) + " MIL" if miles > 1 else "MIL") + (" " + convert_number(resto) if resto > 0 else "")
+    if n < 1000000000:
+        millones, resto = divmod(n, 1000000)
+        return (convert_number(millones) + " MILLONES" if millones > 1 else "UN MILLON") + (" " + convert_number(resto) if resto > 0 else "")
+    return "NUMERO DEMASIADO GRANDE"
 
-    # Asegurar que el formato de offset sea siempre HH:MM
-    if '+' in iso_str:
-        parts = iso_str.split('+')
-        if len(parts) == 2 and ':' not in parts[1]:
-            tz_part = parts[1]
-            if len(tz_part) == 4: # Formato HHMM
-                iso_str = f"{parts[0]}+{tz_part[:2]}:{tz_part[2:]}"
-            elif len(tz_part) == 2: # Formato HH
-                iso_str = f"{parts[0]}+{tz_part}:00"
-    elif '-' in iso_str[10:]: # Buscar el último guion para el offset negativo
-        tz_split_index = iso_str.rfind('-')
-        if tz_split_index > 10:
-             parts = [iso_str[:tz_split_index], iso_str[tz_split_index+1:]]
-             if ':' not in parts[1]:
-                 tz_part = parts[1]
-                 if len(tz_part) == 4: # Formato HHMM
-                     iso_str = f"{parts[0]}-{tz_part[:2]}:{tz_part[2:]}"
-                 elif len(tz_part) == 2: # Formato HH
-                     iso_str = f"{parts[0]}-{tz_part}:00"
-    return iso_str
+def validar_ruc(ruc: str) -> bool:
+    """Valida si un RUC es matemáticamente correcto (Módulo 11)"""
+    if not ruc or len(ruc) != 11 or not ruc.isdigit():
+        return False
+    factores = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+    suma = sum(int(ruc[i]) * factores[i] for i in range(10))
+    residuo = suma % 11
+    digito_verificador = 11 - residuo
+    if digito_verificador == 10: digito_verificador = 0
+    elif digito_verificador == 11: digito_verificador = 1
+    return digito_verificador == int(ruc[10])
 
-def monto_a_letras(amount: float, currency: str) -> str:
-    """Convierte un monto a su representación en palabras para la leyenda."""
-    currency_name = "SOLES" if currency == "PEN" else "DÓLARES AMERICANOS"
-    try:
-        amount_rounded = round(float(amount), 2)
-    except (ValueError, TypeError):
-        return "MONTO INVÁLIDO"
+def obtener_tipo_documento_codigo(tipo: str) -> str:
+    """Mapea string de tipo documento a código SUNAT (Catálogo 06)"""
+    if not tipo: return "1" # DNI por defecto
+    tipo = tipo.upper().strip()
+    mapping = {
+        "RUC": "6",
+        "DNI": "1",
+        "CE": "4",
+        "CARNET DE EXTRANJERIA": "4",
+        "PASAPORTE": "7",
+        "CEDULA": "A"
+    }
+    if tipo in mapping: return mapping[tipo]
+    for key, val in mapping.items():
+        if key in tipo: return val
+    return "1"
 
-    parts = f"{amount_rounded:.2f}".split('.')
-    integer_part = int(parts[0])
-    decimal_part = parts[1]
-    text_integer = num2words(integer_part, lang='es').upper()
-    return f"SON {text_integer} CON {decimal_part}/100 {currency_name}"
+# ==========================================
+# SECCIÓN 2: LÓGICA DE NEGOCIO Y EMISIÓN
+# ==========================================
 
-def get_apisperu_token(db: Session, user: models.User) -> str:
-    """Obtiene un token válido de Apis Perú, refrescándolo si es necesario."""
-    if user.apisperu_token and user.apisperu_token_expires:
-        if datetime.now(timezone.utc) < (user.apisperu_token_expires - timedelta(minutes=5)):
-            return user.apisperu_token
+def _construir_items_payload(items):
+    """Helper interno para construir el array de items y calcular totales"""
+    items_payload = []
+    totales = {
+        "gravada": 0.0,
+        "igv": 0.0,
+        "venta": 0.0
+    }
+
+    for item in items:
+        # Manejo flexible de objetos
+        cantidad = float(item.cantidad) if hasattr(item, 'cantidad') else float(item['cantidad'])
+        precio_final = float(item.precio_unitario) if hasattr(item, 'precio_unitario') else float(item['precio_unitario'])
+        
+        producto_nombre = "Producto General"
+        if hasattr(item, 'producto') and item.producto:
+            producto_nombre = item.producto.nombre
+        elif hasattr(item, 'descripcion') and item.descripcion:
+            producto_nombre = item.descripcion
+        
+        producto_id = str(item.producto_id) if (hasattr(item, 'producto_id') and item.producto_id) else "GEN-001"
+
+        # Desglosar IGV (1.18)
+        valor_unitario = round(precio_final / 1.18, 2)
+        igv_unitario = round(precio_final - valor_unitario, 2)
+        
+        valor_total_item = round(valor_unitario * cantidad, 2)
+        igv_total_item = round(igv_unitario * cantidad, 2)
+        precio_total_item = round(precio_final * cantidad, 2)
+
+        totales["gravada"] += valor_total_item
+        totales["igv"] += igv_total_item
+        totales["venta"] += precio_total_item
+
+        items_payload.append({
+            "codigo_interno": producto_id,
+            "descripcion": producto_nombre,
+            "codigo_producto_sunat": "", 
+            "unidad_de_medida": "NIU", 
+            "cantidad": cantidad,
+            "valor_unitario": valor_unitario,
+            "codigo_tipo_precio": "01",
+            "precio_unitario": precio_final,
+            "codigo_tipo_afectacion_igv": "10",
+            "total_base_igv": valor_total_item,
+            "porcentaje_igv": 18,
+            "total_igv": igv_total_item,
+            "total_impuestos": igv_total_item,
+            "total_valor_item": valor_total_item,
+            "total_item": precio_total_item
+        })
+    
+    # Redondeos finales
+    totales["gravada"] = round(totales["gravada"], 2)
+    totales["igv"] = round(totales["igv"], 2)
+    totales["venta"] = round(totales["venta"], 2)
+    
+    return items_payload, totales
+
+def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, db: Session = None, user=None, tipo_doc_comprobante=None, **kwargs):
+    """
+    Convierte una cotización en el payload JSON para la API de facturación.
+    Esta función intenta recuperar el cliente de forma robusta, incluso creando una sesión temporal si main.py no la pasa.
+    """
+    cliente = None
+    local_db_created = False
+    
+    # Lista de posibles nombres de relación en el modelo Cotizacion
+    posibles_nombres = ['cliente', 'client', 'empresa', 'company', 'customer', 'tercero']
+    
+    # Intento 1: Buscar en atributos del objeto
+    for nombre in posibles_nombres:
+        try:
+            val = getattr(cotizacion, nombre, None)
+            if val:
+                cliente = val
+                break
+        except: pass
+        
+    # Intento 2: Si es un diccionario
+    if not cliente and isinstance(cotizacion, dict):
+        for nombre in posibles_nombres:
+            val = cotizacion.get(nombre)
+            if val:
+                cliente = val
+                break
+
+    # Intento 3: Recuperación por ID (Requiere DB)
+    if not cliente:
+        # Verificar si necesitamos crear una sesión de emergencia
+        if db is None:
+            try:
+                db = SessionLocal()
+                local_db_created = True
+                print("DEBUG: [FacturacionService] Sesión DB temporal creada para recuperación de cliente.")
+            except Exception as e:
+                print(f"DEBUG: [FacturacionService] No se pudo crear sesión temporal: {e}")
+
+        if db:
+            cliente_id = None
+            posibles_ids = ['cliente_id', 'client_id', 'empresa_id', 'customer_id']
+            
+            for id_name in posibles_ids:
+                if hasattr(cotizacion, id_name):
+                    cliente_id = getattr(cotizacion, id_name)
+                    if cliente_id: break
+                elif isinstance(cotizacion, dict) and cotizacion.get(id_name):
+                    cliente_id = cotizacion.get(id_name)
+                    if cliente_id: break
+            
+            if cliente_id:
+                try:
+                    cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+                except Exception as e:
+                    print(f"Advertencia: Falló recuperación de cliente por ID {cliente_id}: {e}")
+
+    # Cerrar sesión temporal si se creó
+    if local_db_created and db:
+        db.close()
+
+    # Validación final
+    if not cliente:
+        debug_id = getattr(cotizacion, 'id', 'Desconocido')
+        raise FacturacionException(f"Error crítico: No se encontró la información del cliente en la cotización ID {debug_id}. Verifica que la cotización tenga un cliente asignado.")
+    
+    # 2. Datos Cliente y Tipo Doc
+    tipo_doc_raw = getattr(cliente, 'tipo_documento', 'DNI')
+    num_doc_raw = getattr(cliente, 'numero_documento', '')
+    
+    tipo_doc_cliente = obtener_tipo_documento_codigo(tipo_doc_raw)
+    numero_doc_cliente = str(num_doc_raw).strip() if num_doc_raw else "00000000"
+    
+    # Determinar tipo de comprobante
+    if tipo_doc_comprobante:
+        tipo_comprobante = tipo_doc_comprobante
+        if tipo_comprobante == "01":
+            serie = "F001"
         else:
-            print("INFO: Token Apis Perú expirado o cerca de expirar, obteniendo uno nuevo.")
-
-    if not user.apisperu_user or not user.apisperu_password:
-        raise FacturacionException("Credenciales de Apis Perú (usuario/contraseña) no configuradas en el perfil.")
-
-    try:
-        decrypted_password = security.decrypt_data(user.apisperu_password)
-    except Exception as e:
-        print(f"ERROR: Fallo al desencriptar contraseña Apis Perú para usuario {user.id}: {e}")
-        raise FacturacionException("Error interno al procesar credenciales de Apis Perú.")
-
-    login_payload = {"username": user.apisperu_user, "password": decrypted_password}
-    login_url = f"{settings.APISPERU_URL}/auth/login"
-    print(f"DEBUG: Intentando login en Apis Perú: {login_url}")
-
-    try:
-        response = requests.post(login_url, json=login_payload, timeout=15)
-        print(f"DEBUG: Respuesta login Apis Perú Status: {response.status_code}")
-        response.raise_for_status()
-
-        data = response.json()
-        new_token = data.get("token")
-        if not new_token:
-            print("ERROR: Respuesta de login Apis Perú no contiene token.")
-            raise FacturacionException("La respuesta de la API de login no contiene un token.")
-
-        user.apisperu_token = new_token
-        user.apisperu_token_expires = datetime.now(timezone.utc) + timedelta(hours=23, minutes=50)
-        db.commit()
-        print("INFO: Nuevo token Apis Perú obtenido y guardado.")
-        return new_token
-
-    except requests.exceptions.Timeout:
-        print(f"ERROR: Timeout al conectar con {login_url}")
-        raise FacturacionException("Tiempo de espera agotado al intentar iniciar sesión en Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Error de conexión con Apis Perú ({login_url})"
-        if e.response is not None:
-             status_code = e.response.status_code
-             try:
-                 error_data = e.response.json()
-                 api_message = error_data.get('message') or error_data.get('error') or error_data.get('detail')
-                 if api_message:
-                     error_msg += f" | Respuesta API: {api_message}"
-                 elif status_code in [400, 401] and ("credenciales" in str(error_data).lower() or "credentials" in str(error_data).lower()):
-                     error_msg = "Credenciales de Apis Perú inválidas. Verifique usuario y contraseña en su perfil."
-                 else:
-                     error_msg += f" | Respuesta API: {str(error_data)[:200]}"
-             except ValueError:
-                 error_msg += f" | Respuesta API (no JSON): {e.response.text[:200]}"
-             error_msg += f" (Status: {status_code})"
-             if status_code in [400, 401] and "Credenciales" in error_msg:
-                  print(f"ERROR: {error_msg}")
-                  raise FacturacionException(error_msg)
-        print(f"ERROR: {error_msg}")
-        raise FacturacionException(error_msg)
-    except Exception as e:
-        print(f"ERROR: Error inesperado al iniciar sesión en Apis Perú: {e}")
-        traceback.print_exc()
-        raise FacturacionException(f"Error inesperado al iniciar sesión en Apis Perú: {e}")
-
-
-def get_companies(token: str) -> list:
-    """Obtiene la lista de empresas asociadas al token de Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    companies_url = f"{settings.APISPERU_URL}/companies"
-    print(f"DEBUG: Obteniendo empresas desde: {companies_url}")
-    try:
-        response = requests.get(companies_url, headers=headers, timeout=10)
-        print(f"DEBUG: Respuesta get_companies Status: {response.status_code}")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al obtener empresas de Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Error de conexión al obtener empresas: {e}"
-        if e.response is not None:
-            try: error_data = e.response.json(); error_msg += f" | API: {error_data.get('message') or str(error_data)}"
-            except ValueError: error_msg += f" | API (no JSON): {e.response.text[:100]}"
-            error_msg += f" (Status: {e.response.status_code})"
-        raise FacturacionException(error_msg)
-    except Exception as e:
-        raise FacturacionException(f"Error inesperado al obtener empresas: {e}")
-
-
-# --- *** FUNCIÓN REVISADA CON TERCERA ESTRATEGIA DE CÁLCULO *** ---
-def convert_cotizacion_to_invoice_payload(cotizacion: models.Cotizacion, user: models.User, serie: str, correlativo: str, tipo_doc_comprobante: str) -> dict:
-    """Convierte datos de cotización a payload, usando la lógica V3 centralizada."""
-    print("DEBUG: Iniciando conversión cotización a payload (ESTRATEGIA V3 Centralizada)...")
-    # Validaciones iniciales
-    if not all([user.business_ruc, user.business_name, user.business_address]):
-        raise FacturacionException("Datos de la empresa (RUC, Razón Social, Dirección) incompletos en el perfil.")
-    if cotizacion.nro_documento == user.business_ruc:
-        raise FacturacionException("No se puede emitir un comprobante al RUC de la propia empresa.")
-    if not cotizacion.productos:
-         raise FacturacionException("La cotización no tiene productos para facturar.")
-
-    tipo_doc_map = {"DNI": "1", "RUC": "6"}
-    client_tipo_doc = tipo_doc_map.get(cotizacion.tipo_documento, "0")
-
-    details = []
-
-    # --- USAR LÓGICA V3 CENTRALIZADA ---
-    # Convertir productos Pydantic/ORM a dict simples para la función
-    productos_dict = [
-        {"unidades": prod.unidades, "precio_unitario": prod.precio_unitario, "descripcion": prod.descripcion, "id": prod.id}
-        for prod in cotizacion.productos
-    ]
-    
-    totals_v3 = calculate_cotizacion_totals_v3(productos_dict)
-    
-    mto_oper_gravadas_final_d = totals_v3['total_gravado_v3']
-    mto_igv_final_d = totals_v3['total_igv_v3']
-    mto_imp_venta_final_d = totals_v3['monto_total_v3']
-    line_totals_v3 = totals_v3['line_totals']
-    # --- FIN LÓGICA V3 ---
-
-
-    for i, prod_dict in enumerate(productos_dict):
-        # Obtener los totales V3 calculados para esta línea
-        line_totals = line_totals_v3[i]
-        
-        # Extraer valores Decimal
-        valor_unitario_sin_igv_payload_d = line_totals['valor_unitario_sin_igv_payload']
-        mto_valor_venta_linea_d = line_totals['mto_valor_venta_linea']
-        igv_linea_d = line_totals['igv_linea']
-        mto_precio_unitario_d = line_totals['mto_precio_unitario_con_igv']
-
-        # Validar si el producto fue válido (monto_valor_venta > 0 o == 0)
-        # La función de cálculo ya maneja esto devolviendo 0 si es inválido
-        if mto_valor_venta_linea_d == Decimal('0') and igv_linea_d == Decimal('0') and mto_precio_unitario_d == Decimal('0'):
-             # Si el precio original era 0, está bien, si no, era inválido
-             if to_decimal(prod_dict['unidades']) > 0 and to_decimal(prod_dict['precio_unitario']) > 0:
-                 print(f"WARN: Producto inválido omitido (cálculo V3 dio 0): ID={prod_dict['id']}")
-                 continue
-        
-        # Convertir a float para el payload JSON, asegurando precisión
-        details.append({
-            "codProducto": f"P{prod_dict['id']}",
-            "unidad": "NIU",
-            "descripcion": clean_text_string(prod_dict['descripcion']),
-            "cantidad": float(to_decimal(prod_dict['unidades'])), # No redondear cantidad
-            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d), # VU sin IGV (alta precisión para UBL)
-            "mtoValorVenta": float(mto_valor_venta_linea_d), # VT línea sin IGV (2 dec) - CLAVE
-            "mtoBaseIgv": float(mto_valor_venta_linea_d), # Base IGV = mtoValorVenta
-            "porcentajeIgv": float(TASA_IGV * 100),
-            "igv": float(igv_linea_d), # IGV línea (2 dec)
-            "tipAfeIgv": 10,
-            "totalImpuestos": float(igv_linea_d), # Total impuestos línea
-            "mtoPrecioUnitario": float(mto_precio_unitario_d) # PU con IGV (2 dec)
-        })
-
-    if not details:
-         raise FacturacionException("No hay productos válidos en la cotización para facturar.")
-
-    # Convertir totales a float
-    mto_oper_gravadas = float(mto_oper_gravadas_final_d)
-    mto_igv_total = float(mto_igv_final_d)
-    mto_imp_venta_total = float(mto_imp_venta_final_d)
-
-    tipo_moneda_api = "PEN" if cotizacion.moneda == "SOLES" else "USD"
-    legend_value = monto_a_letras(mto_imp_venta_total, tipo_moneda_api)
-
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_emision_dt = datetime.now(peru_tz)
-    fecha_emision_final = format_date_for_api(fecha_emision_dt)
-    print(f"DEBUG: Fecha Emisión API: {fecha_emision_final}")
-
-    # Payload (estructura sin cambios)
-    payload = {
-        "ublVersion": "2.1",
-        "tipoOperacion": "0101",
-        "tipoDoc": tipo_doc_comprobante,
-        "serie": serie,
-        "correlativo": correlativo,
-        "fechaEmision": fecha_emision_final,
-        "formaPago": {"moneda": tipo_moneda_api, "tipo": "Contado"},
-        "tipoMoneda": tipo_moneda_api,
-        "client": {
-            "tipoDoc": client_tipo_doc,
-            "numDoc": clean_text_string(cotizacion.nro_documento),
-            "rznSocial": clean_text_string(cotizacion.nombre_cliente),
-            "address": {
-                "direccion": clean_text_string(cotizacion.direccion_cliente) if cotizacion.direccion_cliente else '-',
-                "provincia": "LIMA", "departamento": "LIMA", "distrito": "LIMA", "ubigueo": "150101"
-            }
-        },
-        "company": {
-            "ruc": clean_text_string(user.business_ruc),
-            "razonSocial": clean_text_string(user.business_name),
-            "nombreComercial": clean_text_string(user.business_name),
-            "address": {
-                "direccion": clean_text_string(user.business_address),
-                "provincia": "LIMA", "departamento": "LIMA", "distrito": "LIMA", "ubigueo": "150101"
-            }
-        },
-        "mtoOperGravadas": mto_oper_gravadas,
-        "mtoIGV": mto_igv_total,
-        "valorVenta": mto_oper_gravadas,
-        "totalImpuestos": mto_igv_total,
-        "subTotal": mto_imp_venta_total,
-        "mtoImpVenta": mto_imp_venta_total,
-        "details": details,
-        "legends": [{"code": "1000", "value": legend_value}]
-    }
-    print("DEBUG: Payload de factura generado (ESTRATEGIA V3 Centralizada).")
-    return payload
-
-# --- *** FUNCIÓN REVISADA CON TERCERA ESTRATEGIA DE CÁLCULO (FACTURA DIRECTA) *** ---
-def convert_direct_invoice_to_payload(factura_data: schemas.FacturaCreateDirect, user: models.User, serie: str, correlativo: str) -> dict:
-    """Convierte datos de factura directa a payload, usando la lógica V3 centralizada."""
-    print("DEBUG: Iniciando conversión factura directa a payload (ESTRATEGIA V3 Centralizada)...")
-    # Validaciones iniciales
-    if not all([user.business_ruc, user.business_name, user.business_address]):
-        raise FacturacionException("Datos de la empresa incompletos en el perfil.")
-    if factura_data.nro_documento_cliente == user.business_ruc:
-        raise FacturacionException("No se puede emitir un comprobante al RUC de la propia empresa.")
-    if not factura_data.productos:
-         raise FacturacionException("La factura debe tener al menos un producto.")
-
-    tipo_doc_map = {"DNI": "1", "RUC": "6"}
-    client_tipo_doc = tipo_doc_map.get(factura_data.tipo_documento_cliente, "0")
-
-    details = []
-
-    # --- USAR LÓGICA V3 CENTRALIZADA ---
-    # Productos ya vienen como Pydantic/lista de dicts
-    totals_v3 = calculate_cotizacion_totals_v3(factura_data.productos)
-    
-    mto_oper_gravadas_final_d = totals_v3['total_gravado_v3']
-    mto_igv_final_d = totals_v3['total_igv_v3']
-    mto_imp_venta_final_d = totals_v3['monto_total_v3']
-    line_totals_v3 = totals_v3['line_totals']
-    # --- FIN LÓGICA V3 ---
-
-
-    for i, prod in enumerate(factura_data.productos):
-        # Obtener los totales V3 calculados para esta línea
-        line_totals = line_totals_v3[i]
-        
-        # Extraer valores Decimal
-        valor_unitario_sin_igv_payload_d = line_totals['valor_unitario_sin_igv_payload']
-        mto_valor_venta_linea_d = line_totals['mto_valor_venta_linea']
-        igv_linea_d = line_totals['igv_linea']
-        mto_precio_unitario_d = line_totals['mto_precio_unitario_con_igv']
-
-        # Validar si el producto fue válido
-        if mto_valor_venta_linea_d == Decimal('0') and igv_linea_d == Decimal('0') and mto_precio_unitario_d == Decimal('0'):
-             if to_decimal(prod.unidades) > 0 and to_decimal(prod.precio_unitario) > 0:
-                 print(f"WARN: Producto inválido omitido (directo, cálculo V3 dio 0): Desc={prod.descripcion}")
-                 continue
-
-        # Convertir a float para JSON, asegurando precisión
-        details.append({
-            "codProducto": f"DP{i+1}",
-            "unidad": "NIU",
-            "descripcion": clean_text_string(prod.descripcion),
-            "cantidad": float(to_decimal(prod.unidades)),
-            "mtoValorUnitario": float(valor_unitario_sin_igv_payload_d),
-            "mtoValorVenta": float(mto_valor_venta_linea_d),
-            "mtoBaseIgv": float(mto_valor_venta_linea_d),
-            "porcentajeIgv": float(TASA_IGV * 100),
-            "igv": float(igv_linea_d),
-            "tipAfeIgv": 10,
-            "totalImpuestos": float(igv_linea_d),
-            "mtoPrecioUnitario": float(mto_precio_unitario_d)
-        })
-
-    if not details:
-         raise FacturacionException("No hay productos válidos en la factura directa.")
-
-    # Convertir Totales Globales Finales a float
-    mto_oper_gravadas = float(mto_oper_gravadas_final_d)
-    mto_igv_total = float(mto_igv_final_d)
-    mto_imp_venta_total = float(mto_imp_venta_final_d)
-
-    tipo_moneda_api = "PEN" if factura_data.moneda == "SOLES" else "USD"
-    legend_value = monto_a_letras(mto_imp_venta_total, tipo_moneda_api)
-
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_emision_final = format_date_for_api(datetime.now(peru_tz))
-    print(f"DEBUG: Fecha Emisión API (Directo): {fecha_emision_final}")
-
-    # Payload (estructura sin cambios)
-    payload = {
-        "ublVersion": "2.1", "tipoOperacion": "0101",
-        "tipoDoc": factura_data.tipo_comprobante,
-        "serie": serie, "correlativo": correlativo, "fechaEmision": fecha_emision_final,
-        "formaPago": {"moneda": tipo_moneda_api, "tipo": "Contado"}, "tipoMoneda": tipo_moneda_api,
-        "client": {
-            "tipoDoc": client_tipo_doc,
-            "numDoc": clean_text_string(factura_data.nro_documento_cliente),
-            "rznSocial": clean_text_string(factura_data.nombre_cliente),
-            "address": {"direccion": clean_text_string(factura_data.direccion_cliente) if factura_data.direccion_cliente else '-', "provincia": "LIMA", "departamento": "LIMA", "distrito": "LIMA", "ubigueo": "150101"}
-        },
-        "company": {
-            "ruc": clean_text_string(user.business_ruc),
-            "razonSocial": clean_text_string(user.business_name),
-            "nombreComercial": clean_text_string(user.business_name),
-            "address": {"direccion": clean_text_string(user.business_address), "provincia": "LIMA", "departamento": "LIMA", "distrito": "LIMA", "ubigueo": "150101"}
-        },
-        "mtoOperGravadas": mto_oper_gravadas, "mtoIGV": mto_igv_total, "valorVenta": mto_oper_gravadas,
-        "totalImpuestos": mto_igv_total, "subTotal": mto_imp_venta_total, "mtoImpVenta": mto_imp_venta_total,
-        "details": details, "legends": [{"code": "1000", "value": legend_value}]
-    }
-    print("DEBUG: Payload de factura directa generado (ESTRATEGIA V3 Centralizada).")
-    return payload
-
-
-def send_invoice(token: str, payload: dict) -> dict:
-    """Envía el payload de la factura a la API de Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    send_url = f"{settings.APISPERU_URL}/invoice/send"
-    print(f"DEBUG: Enviando payload a: {send_url}")
-    try:
-        response = requests.post(send_url, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Respuesta send_invoice Status: {response.status_code}")
-
-        if response.status_code >= 400:
-            error_message = f"Error {response.status_code} de la API"
-            response_text = response.text
-            try:
-                error_data = response.json()
-                msg = None
-                if isinstance(error_data, list):
-                     msg = "; ".join([f"Campo '{err.get('loc', ['?'])[-1]}': {err.get('msg', 'Inválido')}" for err in error_data])
-                elif isinstance(error_data, dict):
-                     msg = error_data.get('message') or error_data.get('error') or error_data.get('detail')
-                     sunat_error = error_data.get('sunatResponse', {}).get('error')
-                     if sunat_error and sunat_error.get('message'):
-                          msg = f"{msg or ''} | SUNAT: {sunat_error.get('message')}"
-                          if sunat_error.get('code'): msg += f" (Code: {sunat_error.get('code')})"
-                     elif not msg and error_data.get('sunatResponse', {}).get('cdrResponse', {}).get('description'):
-                          msg = f"SUNAT: {error_data['sunatResponse']['cdrResponse']['description']}"
-                error_message += f": {msg or response_text[:500]}"
-            except ValueError:
-                error_message += f": {response_text[:500]}"
-
-            if response.status_code == 500:
-                 original_api_msg_part = ""
-                 if ":" in error_message:
-                     original_api_msg = error_message.split(":", 1)[1].strip()
-                     if original_api_msg and original_api_msg != f"Error {response.status_code} de la API":
-                          original_api_msg_part = f" Mensaje original: {original_api_msg}"
-                 error_message_500 = (f"Error 500 de la API externa (Apis Perú): Posible problema temporal. Revise datos e intente más tarde.{original_api_msg_part}")
-                 print(f"ERROR: {error_message_500}")
-                 raise FacturacionException(error_message_500)
-            else:
-                 print(f"ERROR: {error_message}")
-                 raise FacturacionException(error_message)
-
-        try:
-             response_data = response.json()
-             return response_data
-        except ValueError:
-             print(f"ERROR: Respuesta exitosa ({response.status_code}) pero no es JSON válido.")
-             raise FacturacionException(f"Respuesta exitosa ({response.status_code}) pero inválida del servidor de facturación.")
-
-    except requests.exceptions.Timeout:
-        print(f"ERROR: Timeout al enviar factura a {send_url}")
-        raise FacturacionException("Tiempo de espera agotado al enviar la factura a Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        print(f"ERROR: Error de conexión al enviar factura: {e}")
-        raise FacturacionException(f"Error de conexión al enviar la factura: {e}")
-    except FacturacionException as e:
-        raise e
-    except Exception as e:
-        print(f"ERROR: Error inesperado en send_invoice: {e}")
-        traceback.print_exc()
-        raise FacturacionException(f"Error inesperado procesando respuesta de envío: {e}")
-
-# --- (El resto de funciones como convert_data_to_note_payload, send_note, etc. permanecen igual) ---
-# ... (código existente de las otras funciones sin cambios) ...
-
-def convert_data_to_note_payload(comprobante_afectado: models.Comprobante, nota_data: schemas.NotaCreateAPI, user: models.User, serie: str, correlativo: str, tipo_doc_nota: str) -> dict:
-    """Convierte datos para el payload de una Nota de Crédito/Débito."""
-    comprobante_original = comprobante_afectado.payload_enviado
-    if not comprobante_original:
-        raise FacturacionException("El comprobante a anular/modificar no tiene datos (payload) de envío guardados.")
-
-    campos_requeridos = ['mtoImpVenta', 'tipoMoneda', 'client', 'company', 'details', 'mtoOperGravadas', 'mtoIGV', 'totalImpuestos']
-    if not all(campo in comprobante_original for campo in campos_requeridos):
-         raise FacturacionException("El payload del comprobante original está incompleto.")
-
-    monto_total_original = comprobante_original.get('mtoImpVenta')
-    if monto_total_original is None:
-        raise FacturacionException("El payload del comprobante original no tiene 'mtoImpVenta'.")
-
-    leyenda_valor = monto_a_letras(monto_total_original, comprobante_original.get('tipoMoneda', 'PEN'))
-
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_emision_final = format_date_for_api(datetime.now(peru_tz))
-
-    details_nota = comprobante_original.get('details', [])
-    mto_oper_gravadas_nota = comprobante_original.get('mtoOperGravadas', 0)
-    mto_igv_nota = comprobante_original.get('mtoIGV', 0)
-    total_impuestos_nota = comprobante_original.get('totalImpuestos', 0)
-    mto_imp_venta_nota = comprobante_original.get('mtoImpVenta', 0)
-
-    if nota_data.cod_motivo not in ['01', '02', '03']:
-        print(f"WARN: Creando nota para motivo '{nota_data.cod_motivo}'. Los montos y detalles se están copiando del original. Considerar ajustes manuales o lógica adicional si es necesario.")
-
-    payload = {
-        "ublVersion": "2.1",
-        "tipoDoc": tipo_doc_nota,
-        "serie": serie,
-        "correlativo": correlativo,
-        "fechaEmision": fecha_emision_final,
-        "tipDocAfectado": comprobante_afectado.tipo_doc,
-        "numDocfectado": f"{comprobante_afectado.serie}-{comprobante_afectado.correlativo}",
-        "codMotivo": nota_data.cod_motivo,
-        "desMotivo": clean_text_string(nota_data.descripcion_motivo),
-        "tipoMoneda": comprobante_original.get('tipoMoneda'),
-        "client": comprobante_original.get('client'),
-        "company": comprobante_original.get('company'),
-        "mtoOperGravadas": mto_oper_gravadas_nota,
-        "mtoIGV": mto_igv_nota,
-        "totalImpuestos": total_impuestos_nota,
-        "mtoImpVenta": mto_imp_venta_nota,
-        "details": details_nota,
-        "legends": [{"code": "1000", "value": leyenda_valor}]
-    }
-    return payload
-
-def send_note(token: str, payload: dict) -> dict:
-    """Envía el payload de la Nota (Crédito/Débito) a Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    send_url = f"{settings.APISPERU_URL}/note/send"
-    print(f"DEBUG: Enviando payload de Nota a: {send_url}")
-    try:
-        response = requests.post(send_url, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Respuesta send_note Status: {response.status_code}")
-
-        if response.status_code >= 400:
-            error_message = f"Error {response.status_code} de la API al enviar Nota"
-            response_text = response.text
-            try:
-                error_data = response.json()
-                msg = error_data.get('message') or error_data.get('error') or error_data.get('detail') or str(error_data)
-                error_message += f": {msg}"
-            except ValueError:
-                error_message += f": {response_text[:200]}"
-
-            if response.status_code == 500:
-                 original_api_msg_part = ""
-                 if ":" in error_message:
-                     original_api_msg = error_message.split(":", 1)[1].strip()
-                     if original_api_msg and original_api_msg != f"Error {response.status_code} de la API":
-                          original_api_msg_part = f" Mensaje original: {original_api_msg}"
-                 error_message_500 = f"Error 500 de la API externa (Apis Perú) al enviar Nota.{original_api_msg_part}"
-                 print(f"ERROR: {error_message_500}")
-                 raise FacturacionException(error_message_500)
-            else:
-                 print(f"ERROR: {error_message}")
-                 raise FacturacionException(error_message)
-
-        try:
-             return response.json()
-        except ValueError:
-            print(f"ERROR: Respuesta exitosa ({response.status_code}) de Nota pero no es JSON.")
-            raise FacturacionException("Respuesta exitosa pero inválida del servidor de facturación al enviar nota.")
-
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al enviar la nota a Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        raise FacturacionException(f"Error de conexión al enviar la nota: {e}")
-    except FacturacionException as e:
-        raise e
-    except Exception as e:
-        print(f"ERROR: Error inesperado en send_note: {e}")
-        traceback.print_exc()
-        raise FacturacionException(f"Error inesperado procesando respuesta de envío de nota: {e}")
-
-def convert_boletas_to_summary_payload(boletas_del_dia: List[models.Comprobante], user: models.User, fecha_resumen: datetime, correlativo: int) -> dict:
-    """Convierte una lista de boletas al payload para Resumen Diario."""
-    if not all([user.business_ruc, user.business_name]):
-        raise FacturacionException("Datos de la empresa (RUC, Razón Social) incompletos en el perfil.")
-
-    details = []
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_resumen_peru_str = fecha_resumen.astimezone(peru_tz).strftime('%Y-%m-%d')
-
-
-    for boleta in boletas_del_dia:
-        payload = boleta.payload_enviado
-        if not payload:
-             print(f"WARN: Boleta ID {boleta.id} sin payload_enviado, omitida del resumen.")
-             continue
-
-        estado_item = "1"
-
-        client_payload = payload.get('client', {})
-        tipo_doc_cliente = client_payload.get('tipoDoc')
-        num_doc_cliente = client_payload.get('numDoc')
-        monto_total_boleta = payload.get('mtoImpVenta')
-
-        if not all([tipo_doc_cliente, num_doc_cliente, monto_total_boleta is not None]):
-            print(f"WARN: Datos incompletos en payload de Boleta ID {boleta.id}, omitida del resumen.")
-            continue
-
-        mto_grav = round(float(payload.get('mtoOperGravadas', 0)), 2)
-        mto_inaf = round(float(payload.get('mtoOperInafectas', 0)), 2)
-        mto_exon = round(float(payload.get('mtoOperExoneradas', 0)), 2)
-        mto_igv = round(float(payload.get('mtoIGV', 0)), 2)
-        mto_total = round(float(monto_total_boleta), 2)
-
-
-        details.append({
-            "tipoDoc": boleta.tipo_doc,
-            "serieNro": f"{boleta.serie}-{boleta.correlativo}",
-            "estado": estado_item,
-            "clienteTipo": tipo_doc_cliente,
-            "clienteNro": num_doc_cliente,
-            "total": mto_total,
-            "mtoOperGravadas": mto_grav,
-            "mtoOperInafectas": mto_inaf,
-            "mtoOperExoneradas": mto_exon,
-            "mtoIGV": mto_igv,
-        })
-
-    if not details:
-        raise FacturacionException("No hay boletas válidas con datos completos para incluir en el resumen.")
-
-    fecha_generacion_str = datetime.now(peru_tz).strftime('%Y-%m-%d')
-
-
-    return {
-        "fecGeneracion": fecha_generacion_str,
-        "fecResumen": fecha_resumen_peru_str,
-        "correlativo": f"{correlativo:03d}",
-        "moneda": "PEN",
-        "company": {
-            "ruc": clean_text_string(user.business_ruc),
-            "razonSocial": clean_text_string(user.business_name),
-        },
-        "details": details
-    }
-
-
-def send_summary(token: str, payload: dict) -> dict:
-    """Envía el payload de Resumen Diario a Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    send_url = f"{settings.APISPERU_URL}/summary/send"
-    print(f"DEBUG: Enviando payload de Resumen a: {send_url}")
-    try:
-        response = requests.post(send_url, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Respuesta send_summary Status: {response.status_code}")
-
-        if response.status_code >= 400:
-            error_message = f"Error {response.status_code} de la API al enviar Resumen"
-            response_text = response.text
-            try:
-                error_data = response.json(); msg = error_data.get('message') or str(error_data); error_message += f": {msg}"
-            except ValueError: error_message += f": {response_text[:200]}"
-            print(f"ERROR: {error_message}")
-            raise FacturacionException(error_message)
-
-        try:
-             return response.json()
-        except ValueError:
-             print(f"ERROR: Respuesta exitosa ({response.status_code}) de Resumen pero no JSON.")
-             raise FacturacionException("Respuesta exitosa pero inválida del servidor al enviar resumen.")
-
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al enviar el resumen a Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        raise FacturacionException(f"Error de conexión al enviar el resumen: {e}")
-    except FacturacionException as e:
-        raise e
-    except Exception as e:
-        print(f"ERROR: Error inesperado en send_summary: {e}"); traceback.print_exc()
-        raise FacturacionException(f"Error inesperado procesando respuesta de envío de resumen: {e}")
-
-def convert_facturas_to_voided_payload(items_baja: List[dict], user: models.User, fecha_comunicacion: datetime, correlativo: int) -> dict:
-    """Convierte una lista de facturas a anular al payload de Comunicación de Baja."""
-    if not all([user.business_ruc, user.business_name]):
-        raise FacturacionException("Datos de la empresa (RUC, Razón Social) incompletos en el perfil.")
-
-    details = []
-    for item in items_baja:
-        comprobante = item['comprobante']
-        if comprobante.tipo_doc != '01':
-            print(f"WARN: Item ID {comprobante.id} no es factura ({comprobante.tipo_doc}), omitido de baja.")
-            continue
-        details.append({
-            "tipoDoc": comprobante.tipo_doc,
-            "serie": comprobante.serie,
-            "correlativo": comprobante.correlativo,
-            "desMotivoBaja": clean_text_string(item['motivo'])[:100]
-        })
-
-    if not details:
-        raise FacturacionException("No hay facturas válidas para incluir en la comunicación de baja.")
-
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_comunicacion_peru_str = fecha_comunicacion.astimezone(peru_tz).strftime('%Y-%m-%d')
-    fecha_generacion_str = datetime.now(peru_tz).strftime('%Y-%m-%d')
-
-    return {
-        "fecGeneracion": fecha_generacion_str,
-        "fecComunicacion": fecha_comunicacion_peru_str,
-        "correlativo": f"{correlativo:03d}",
-        "company": {
-            "ruc": clean_text_string(user.business_ruc),
-            "razonSocial": clean_text_string(user.business_name),
-        },
-        "details": details
-    }
-
-
-def send_voided(token: str, payload: dict) -> dict:
-    """Envía el payload de Comunicación de Baja a Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    send_url = f"{settings.APISPERU_URL}/voided/send"
-    print(f"DEBUG: Enviando payload de Baja a: {send_url}")
-    try:
-        response = requests.post(send_url, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Respuesta send_voided Status: {response.status_code}")
-
-        if response.status_code >= 400:
-            error_message = f"Error {response.status_code} de la API al enviar Comunicación de Baja"
-            response_text = response.text
-            try:
-                error_data = response.json(); msg = error_data.get('message') or str(error_data); error_message += f": {msg}"
-            except ValueError: error_message += f": {response_text[:200]}"
-            print(f"ERROR: {error_message}")
-            raise FacturacionException(error_message)
-
-        try:
-             return response.json()
-        except ValueError:
-             print(f"ERROR: Respuesta exitosa ({response.status_code}) de Baja pero no JSON.")
-             raise FacturacionException("Respuesta exitosa pero inválida del servidor al enviar baja.")
-
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al enviar la comunicación de baja a Apis Perú.")
-    except requests.exceptions.RequestException as e:
-        raise FacturacionException(f"Error de conexión al enviar la comunicación de baja: {e}")
-    except FacturacionException as e:
-        raise e
-    except Exception as e:
-        print(f"ERROR: Error inesperado en send_voided: {e}")
-        traceback.print_exc()
-        raise FacturacionException(f"Error inesperado procesando respuesta de envío de baja: {e}")
-
-
-def get_document_xml(token: str, comprobante: models.Comprobante) -> bytes:
-    """Obtiene el XML de un comprobante/nota usando su payload guardado."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    if comprobante.tipo_doc in ['07', '08']:
-        endpoint = f"{settings.APISPERU_URL}/note/xml"
-    elif comprobante.tipo_doc == '09':
-        endpoint = f"{settings.APISPERU_URL}/despatch/xml"
+            serie = "B001"
     else:
-        endpoint = f"{settings.APISPERU_URL}/invoice/xml"
+        if tipo_doc_cliente == "6": 
+            tipo_comprobante = "01"
+            serie = "F001" 
+        else:
+            tipo_comprobante = "03"
+            serie = "B001"
 
-    print(f"DEBUG: Solicitando XML para {comprobante.tipo_doc} {comprobante.serie}-{comprobante.correlativo} desde {endpoint}")
-    try:
-        doc_payload = comprobante.payload_enviado
-        if not doc_payload:
-            raise FacturacionException("No hay payload guardado para generar el XML.")
+    # 3. Items y Totales
+    items_lista = getattr(cotizacion, 'items', [])
+    if isinstance(cotizacion, dict): items_lista = cotizacion.get('items', [])
+        
+    items_payload, totales = _construir_items_payload(items_lista)
+    leyenda_monto = numero_a_letras(totales["venta"])
 
-        response = requests.post(endpoint, headers=headers, json=doc_payload, timeout=15)
-        response.raise_for_status()
-        if 'application/json' in response.headers.get('content-type', '').lower():
-             try:
-                 error_data = response.json()
-                 msg = error_data.get('message') or str(error_data)
-                 raise FacturacionException(f"Error al obtener XML (API devolvió JSON): {msg}")
-             except ValueError:
-                 raise FacturacionException(f"Error al obtener XML (API devolvió respuesta inesperada): {response.text[:200]}")
+    # 4. Construcción Payload
+    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    hora_emision = datetime.now().strftime("%H:%M:%S")
 
-        return response.content
+    direccion = getattr(cliente, 'direccion', '-') or "-"
+    email = getattr(cliente, 'email', '') or ""
+    
+    nombre = getattr(cliente, 'nombre_empresa', None) or \
+             getattr(cliente, 'nombre_contacto', None) or \
+             getattr(cliente, 'razon_social', None) or \
+             getattr(cliente, 'nombre', None) or "CLIENTE GENERICO"
+    
+    telefono = getattr(cliente, 'telefono', '') or ""
 
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al solicitar el XML.")
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Error de conexión/HTTP al obtener el XML: {e}"
-        if e.response is not None:
-             error_msg += f" (Status: {e.response.status_code})"
-             try: error_data = e.response.json(); error_msg += f" | API: {error_data.get('message') or str(error_data)}"
-             except ValueError: error_msg += f" | API: {e.response.text[:100]}"
-        raise FacturacionException(error_msg)
-    except FacturacionException as e:
-        raise e
-    except Exception as e:
-        raise FacturacionException(f"Error inesperado al procesar la solicitud del XML: {e}")
+    payload = {
+        "serie": serie,
+        "fecha_emision": fecha_emision,
+        "hora_emision": hora_emision,
+        "codigo_tipo_operacion": "0101",
+        "codigo_tipo_documento": tipo_comprobante,
+        "codigo_tipo_moneda": "PEN",
+        "fecha_vencimiento": fecha_emision,
+        "datos_del_emisor": {
+            "codigo_pais": "PE",
+            "ubigeo": "150101", 
+            "direccion": "AV. DEMO 123 - LIMA",
+            "correo_electronico": "facturacion@empresa.com",
+            "telefono": "-",
+            "codigo_del_domicilio_fiscal": "0000"
+        },
+        "datos_del_cliente_o_receptor": {
+            "codigo_tipo_documento_identidad": tipo_doc_cliente,
+            "numero_documento": numero_doc_cliente,
+            "apellidos_y_nombres_o_razon_social": nombre,
+            "codigo_pais": "PE",
+            "ubigeo": "",
+            "direccion": direccion,
+            "correo_electronico": email,
+            "telefono": telefono
+        },
+        "totales": {
+            "total_exportacion": 0.00,
+            "total_operaciones_gravadas": totales["gravada"],
+            "total_operaciones_inafectas": 0.00,
+            "total_operaciones_exoneradas": 0.00,
+            "total_operaciones_gratuitas": 0.00,
+            "total_igv": totales["igv"],
+            "total_impuestos": totales["igv"],
+            "total_valor": totales["gravada"],
+            "total_venta": totales["venta"]
+        },
+        "items": items_payload,
+        "leyendas": [{"codigo": "1000", "valor": leyenda_monto}],
+        "acciones": {
+            "enviar_xml_firmado": True,
+            "enviar_email": True if email else False,
+            "formato_pdf": "a4"
+        }
+    }
+    
+    return payload
 
+def emitir_factura(cotizacion: models.Cotizacion, db: Session, token: str = None):
+    """
+    Emite Factura (01) o Boleta (03) basada en una cotización.
+    """
+    payload = convert_cotizacion_to_invoice_payload(cotizacion, db=db)
+    return _enviar_a_api(payload, token=token)
 
-def get_document_file(token: str, comprobante: models.Comprobante, user: models.User, doc_type: str) -> bytes:
-    """Obtiene PDF (personalizado), XML o CDR de un comprobante/nota."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    print(f"DEBUG: Solicitando archivo '{doc_type}' para {comprobante.tipo_doc} {comprobante.serie}-{comprobante.correlativo}")
+# ==========================================
+# SECCIÓN 3: NOTAS DE CRÉDITO Y DÉBITO
+# ==========================================
 
-    if doc_type == 'cdr':
-        if not comprobante.sunat_response: raise FacturacionException("No hay respuesta de SUNAT guardada para obtener el CDR.")
-        cdr_zip_b64 = comprobante.sunat_response.get('cdrZip')
-        if not cdr_zip_b64:
-             cdr_desc = comprobante.sunat_response.get('cdrResponse', {}).get('description')
-             msg = f"CDR no disponible en la respuesta SUNAT. {cdr_desc or ''}"
-             raise FacturacionException(msg.strip())
-        try:
-            return base64.b64decode(cdr_zip_b64)
-        except Exception as e:
-            raise FacturacionException(f"Error al decodificar el CDR: {e}")
+def emitir_nota_credito(
+    factura_origen_serie: str,
+    factura_origen_numero: str,
+    motivo_codigo: str, 
+    descripcion_motivo: str,
+    cliente_data: dict,
+    items: list,
+    token: str = None
+):
+    items_payload, totales = _construir_items_payload(items)
+    leyenda_monto = numero_a_letras(totales["venta"])
+    
+    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    hora_emision = datetime.now().strftime("%H:%M:%S")
 
-    if doc_type == 'pdf':
-        try:
-            from pdf_generator import create_comprobante_pdf
-            if not comprobante.payload_enviado:
-                 raise FacturacionException("No hay payload guardado para generar el PDF.")
-            pdf_buffer = create_comprobante_pdf(comprobante, user)
-            return pdf_buffer.getvalue()
-        except ImportError:
-             print("ERROR: Módulo pdf_generator no encontrado o con error de importación.")
-             raise FacturacionException("Módulo PDF personalizado no disponible.")
-        except Exception as e:
-             print(f"ERROR: Generando PDF personalizado: {e}")
-             traceback.print_exc()
-             raise FacturacionException(f"Error al generar el PDF personalizado: {e}")
+    serie_nc = "FC01" if factura_origen_serie.startswith("F") else "BC01"
 
-    if doc_type == 'xml':
-        return get_document_xml(token, comprobante)
-
-    raise FacturacionException(f"Tipo de documento '{doc_type}' no es válido para descarga.")
-
-
-# --- Funciones para Guías ---
-
-def convert_data_to_guia_payload(guia_data: schemas.GuiaRemisionCreateAPI, user: models.User, serie: str, correlativo: str) -> dict:
-    """Convierte los datos del frontend al payload de Guía de Remisión."""
-    print("DEBUG: [Guia] Iniciando conversión a payload...")
-    if not all([user.business_ruc, user.business_name]):
-        raise FacturacionException("Datos de la empresa (RUC, Razón Social) incompletos en el perfil.")
-    if not guia_data.bienes:
-         raise FacturacionException("La guía debe tener al menos un bien.")
-
-    peru_tz = timezone(timedelta(hours=-5))
-    fecha_emision_final = format_date_for_api(datetime.now(peru_tz))
-
-    bienes_corregidos = []
-    for i, bien in enumerate(guia_data.bienes):
-        if not bien.descripcion or to_decimal(bien.cantidad) <= 0 or not bien.unidad:
-             print(f"WARN: [Guia] Bien inválido omitido: Desc={bien.descripcion}, Cant={bien.cantidad}, Und={bien.unidad}")
-             continue
-        bien_dict = bien.model_dump()
-        bien_dict['cantidad'] = float(to_decimal(bien_dict['cantidad']).to_eng_string())
-        unidad_final = clean_text_string(bien_dict['unidad']).upper()
-        if unidad_final not in ["NIU", "KGM", "TNE", "LTR", "GLN", "BX", "PK", "CT", "MTR", "FOT", "INH", "YRD", "MTK", "MTQ", "M", "GRM", "LB"]:
-             print(f"WARN: [Guia] Unidad '{unidad_final}' no reconocida, usando NIU por defecto.")
-             unidad_final = "NIU"
-        bien_dict['unidad'] = unidad_final
-        bien_dict['codigo'] = f"PROD-{i+1}"
-        bienes_corregidos.append(bien_dict)
-
-    if not bienes_corregidos:
-         raise FacturacionException("No hay bienes válidas para incluir en la guía.")
-
-
-    company_data = {
-        "ruc": str(user.business_ruc).strip(),
-        "razonSocial": clean_text_string(user.business_name),
-        "nombreComercial": clean_text_string(user.business_name),
-        "address": {
-            "direccion": clean_text_string(user.business_address) if user.business_address else '-',
-            "provincia": "LIMA", "departamento": "LIMA", "distrito": "LIMA", "ubigueo": "150101"
+    payload = {
+        "serie": serie_nc,
+        "fecha_emision": fecha_emision,
+        "hora_emision": hora_emision,
+        "codigo_tipo_operacion": "0101",
+        "codigo_tipo_documento": "07", 
+        "codigo_tipo_moneda": "PEN",
+        "fecha_vencimiento": fecha_emision,
+        "datos_del_emisor": {
+            "codigo_pais": "PE",
+            "ubigeo": "150101", 
+            "direccion": "AV. DEMO 123 - LIMA",
+            "correo_electronico": "facturacion@empresa.com",
+            "telefono": "-",
+            "codigo_del_domicilio_fiscal": "0000"
+        },
+        "datos_del_cliente_o_receptor": {
+            "codigo_tipo_documento_identidad": cliente_data.get('tipo_doc', '1'),
+            "numero_documento": cliente_data.get('numero_doc', '00000000'),
+            "apellidos_y_nombres_o_razon_social": cliente_data.get('nombre', 'CLIENTE'),
+            "codigo_pais": "PE",
+            "direccion": cliente_data.get('direccion', '-'),
+            "correo_electronico": cliente_data.get('email', '')
+        },
+        "documento_afectado": {
+            "external_id": "",
+            "serie": factura_origen_serie,
+            "numero": factura_origen_numero,
+            "codigo_tipo_documento": "01" if factura_origen_serie.startswith("F") else "03"
+        },
+        "nota_credito": {
+            "codigo_tipo_nota_credito": motivo_codigo, 
+            "motivo": descripcion_motivo
+        },
+        "totales": {
+            "total_exportacion": 0.00,
+            "total_operaciones_gravadas": totales["gravada"],
+            "total_operaciones_inafectas": 0.00,
+            "total_operaciones_exoneradas": 0.00,
+            "total_igv": totales["igv"],
+            "total_impuestos": totales["igv"],
+            "total_valor": totales["gravada"],
+            "total_venta": totales["venta"]
+        },
+        "items": items_payload,
+        "leyendas": [{"codigo": "1000", "valor": leyenda_monto}],
+        "acciones": {
+            "enviar_xml_firmado": True,
+            "enviar_email": True if cliente_data.get('email') else False,
+            "formato_pdf": "a4"
         }
     }
 
-    destinatario_data = guia_data.destinatario.model_dump()
-    destinatario_data['numDoc'] = clean_text_string(destinatario_data['numDoc'])
-    destinatario_data['rznSocial'] = clean_text_string(destinatario_data['rznSocial'])
+    return _enviar_a_api(payload, token=token)
 
+def _enviar_a_api(payload, token: str = None):
+    base_url = settings.API_URL
+    api_token = token if token else settings.API_TOKEN
 
-    motivos_traslado = {
-        "01": "VENTA", "14": "VENTA SUJETA A CONFIRMACION DEL COMPRADOR",
-        "04": "TRASLADO ENTRE ESTABLECIMIENTOS DE LA MISMA EMPRESA",
-        "18": "TRASLADO EMISOR ITINERANTE CP", "08": "IMPORTACION", "09": "EXPORTACION",
-        "02": "COMPRA", "19": "TRASLADO A ZONA PRIMARIA", "13": "OTROS"
-    }
-    descripcion_traslado = motivos_traslado.get(guia_data.codTraslado, "OTROS")
+    if not base_url or not api_token:
+        raise FacturacionException("Configuración de facturación incompleta (Falta URL o Token).")
 
-    fecha_traslado_base = guia_data.fecTraslado
-    if isinstance(fecha_traslado_base, datetime): fecha_traslado_base = fecha_traslado_base.date()
-    fecha_traslado_dt = datetime.combine(fecha_traslado_base, datetime.min.time())
-    fecha_traslado_final = format_date_for_api(fecha_traslado_dt.replace(tzinfo=peru_tz))
-
-    envio_data = {
-        "modTraslado": guia_data.modTraslado,
-        "codTraslado": guia_data.codTraslado,
-        "desTraslado": descripcion_traslado,
-        "fecTraslado": fecha_traslado_final,
-        "pesoTotal": round(float(to_decimal(guia_data.pesoTotal).to_eng_string()), 3),
-        "undPesoTotal": "KGM",
-        "partida": guia_data.partida.model_dump(),
-        "llegada": guia_data.llegada.model_dump()
+    url = f"{base_url}/invoice/send"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_token}"
     }
 
-    if guia_data.modTraslado == "01":
-        if not guia_data.transportista or not guia_data.transportista.numDoc or not guia_data.transportista.rznSocial:
-            raise FacturacionException("Para transporte público, RUC y Razón Social del transportista son requeridos.")
-        transportista_data = guia_data.transportista.model_dump(exclude_unset=True, exclude_none=True)
-        transportista_data['tipoDoc'] = '6'
-        envio_data["transportista"] = transportista_data
-        envio_data.pop("vehiculos", None)
-        envio_data.pop("conductores", None)
-
-    elif guia_data.modTraslado == "02":
-        if not guia_data.transportista or not guia_data.transportista.placa:
-            raise FacturacionException("La placa del vehículo es requerida para transporte privado.")
-        envio_data["vehiculos"] = [{"placa": clean_text_string(guia_data.transportista.placa).upper()}]
-        envio_data.pop("transportista", None)
-
-        if not guia_data.conductor or not all([guia_data.conductor.numDoc, guia_data.conductor.nombres, guia_data.conductor.apellidos, guia_data.conductor.licencia]):
-             raise FacturacionException("Todos los datos del conductor (DNI, Nombres, Apellidos, Licencia) son requeridos para transporte privado.")
-        conductor_data = guia_data.conductor.model_dump()
-        conductor_data['tipoDoc'] = '1'
-        conductor_data['tipo'] = 'Principal'
-        envio_data["conductores"] = [conductor_data]
-
-    payload = {
-        "version": "2022",
-        "tipoDoc": "09",
-        "serie": serie,
-        "correlativo": correlativo,
-        "fechaEmision": fecha_emision_final,
-        "company": company_data,
-        "destinatario": destinatario_data,
-        "envio": envio_data,
-        "details": bienes_corregidos
-    }
-    print("DEBUG: [Guia] Payload generado.")
-    return payload
-
-
-def send_guia_remision(token: str, payload: dict) -> dict:
-    """Envía el payload de la Guía de Remisión a Apis Perú."""
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    send_url = f"{settings.APISPERU_URL}/despatch/send"
-    print(f"DEBUG: Enviando payload de Guía a: {send_url}")
     try:
-        response = requests.post(send_url, headers=headers, json=payload, timeout=30)
-        print(f"DEBUG: Respuesta send_guia_remision Status: {response.status_code}")
+        print(f"--- ENVIANDO A SUNAT/OSE ---")
+        response = requests.post(url, json=payload, headers=headers, timeout=45)
+        
+        if response.status_code == 422:
+            error_data = response.json()
+            mensaje = error_data.get('message', 'Error validación datos')
+            if 'errors' in error_data: mensaje += f": {error_data['errors']}"
+            raise FacturacionException(f"Rechazo API: {mensaje}")
+            
+        response.raise_for_status()
+        data = response.json()
+        print(f"--- ÉXITO: {data.get('serie')}-{data.get('numero')} ---")
+        return data
 
-        if response.status_code >= 400:
-            error_message = f"Error {response.status_code} de la API al enviar Guía"
-            response_text = response.text
-            try:
-                error_data = response.json()
-                if isinstance(error_data, list):
-                    error_message += ": " + "; ".join([f"Campo '{err.get('loc', ['?'])[-1]}': {err.get('msg', 'Error')}" for err in error_data])
-                else:
-                    msg = error_data.get('message') or error_data.get('error') or error_data.get('detail') or str(error_data)
-                    error_message += f": {msg}"
-            except ValueError:
-                error_message += f": {response_text[:200]}"
-
-            if response.status_code == 500:
-                 original_api_msg_part = ""
-                 if ":" in error_message:
-                     original_api_msg = error_message.split(":", 1)[1].strip()
-                     if original_api_msg and original_api_msg != f"Error {response.status_code} de la API":
-                          original_api_msg_part = f" Mensaje original: {original_api_msg}"
-                 error_message_500 = f"Error 500 de la API externa (Apis Perú) al enviar Guía.{original_api_msg_part}"
-                 print(f"ERROR: {error_message_500}")
-                 raise FacturacionException(error_message_500)
-            else:
-                 print(f"ERROR: {error_message}")
-                 raise FacturacionException(error_message)
-
-        try:
-             return response.json()
-        except ValueError:
-             print(f"ERROR: Respuesta exitosa ({response.status_code}) de Guía pero no JSON.")
-             raise FacturacionException("Respuesta exitosa pero inválida del servidor al enviar guía.")
-
-    except requests.exceptions.Timeout:
-        raise FacturacionException("Tiempo de espera agotado al enviar la guía a Apis Perú.")
     except requests.exceptions.RequestException as e:
-        raise FacturacionException(f"Error de conexión al enviar la guía: {e}")
-    except FacturacionException as e:
-        raise e
+        error_msg = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            try: error_msg = e.response.json().get('message', e.response.text)
+            except: error_msg = e.response.text
+        print(f"ERROR API: {error_msg}")
+        raise FacturacionException(f"Error Facturación: {error_msg}")
+
+# ==========================================
+# SECCIÓN 4: CONSULTAS Y BAJAS
+# ==========================================
+
+def consultar_comprobante(serie: str, numero: str, tipo: str = "01", token: str = None):
+    base_url = settings.API_URL
+    api_token = token if token else settings.API_TOKEN
+    
+    url = f"{base_url}/invoice/search"
+    payload = {"tipo_comprobante": tipo, "serie": serie, "numero": numero}
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_token}"}
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=30)
+        res.raise_for_status()
+        return res.json()
     except Exception as e:
-        print(f"ERROR: Error inesperado en send_guia_remision: {e}")
-        traceback.print_exc()
-        raise FacturacionException(f"Error inesperado procesando respuesta de envío de guía: {e}")
+        raise FacturacionException(f"Error consulta: {str(e)}")
+
+def anular_comprobante(serie: str, numero: str, motivo: str, tipo: str = "01", token: str = None):
+    base_url = settings.API_URL
+    api_token = token if token else settings.API_TOKEN
+    
+    url = f"{base_url}/voided/send"
+    payload = {
+        "codigo_tipo_documento": tipo,
+        "serie": serie,
+        "numero": numero,
+        "motivo": motivo,
+        "fecha_generacion": datetime.now().strftime("%Y-%m-%d")
+    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_token}"}
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=30)
+        res.raise_for_status()
+        return res.json()
+    except Exception as e:
+        raise FacturacionException(f"Error anulación: {str(e)}")

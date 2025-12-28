@@ -1,29 +1,95 @@
-// frontend/src/utils/apiUtils.js
-// Archivo para centralizar funciones útiles relacionadas con la API.
+import { API_BASE_URL } from '../config';
 
-/**
- * Parsea un objeto de error de la API de FastAPI y devuelve un mensaje legible.
- * @param {object} errorData - El objeto de error JSON de la respuesta de la API.
- * @returns {string} Un mensaje de error formateado y legible para el usuario.
- */
-export const parseApiError = (errorData) => {
-    // Si el error tiene un campo 'detail'
-    if (errorData && errorData.detail) {
-        // Si 'detail' es un string, lo devolvemos directamente.
-        if (typeof errorData.detail === 'string') {
-            return errorData.detail;
-        }
-        // Si 'detail' es un array (común en errores de validación de Pydantic)
-        if (Array.isArray(errorData.detail)) {
-            // Mapeamos cada error del array a un string legible.
-            return errorData.detail.map(err => {
-                // err.loc es un array, ej: ['body', 'password']. Tomamos el último elemento.
-                const field = Array.isArray(err.loc) ? err.loc[err.loc.length - 1] : 'campo';
-                // err.msg es el mensaje de error.
-                return `${field}: ${err.msg}`;
-            }).join('; '); // Unimos los mensajes con '; '
-        }
+const getHeaders = () => {
+  const token = localStorage.getItem('token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token && { Authorization: `Bearer ${token}` }),
+  };
+};
+
+const handleResponse = async (response) => {
+  const contentType = response.headers.get("content-type");
+  let data;
+  if (contentType && contentType.indexOf("application/json") !== -1) {
+    data = await response.json();
+  } else {
+    data = await response.text();
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
+      throw new Error('Sesión expirada.');
     }
-    // Si el formato del error no es el esperado, devolvemos un mensaje genérico.
-    return 'Ocurrió un error desconocido al procesar la respuesta del servidor.';
+    const errorMessage = data?.detail || data?.message || 'Error desconocido';
+    throw new Error(errorMessage);
+  }
+  return data;
+};
+
+export const api = {
+  get: async (endpoint) => {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'GET', headers: getHeaders(),
+    });
+    return handleResponse(response);
+  },
+  post: async (endpoint, body) => {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'POST', headers: getHeaders(), body: JSON.stringify(body),
+    });
+    return handleResponse(response);
+  },
+  put: async (endpoint, body) => {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'PUT', headers: getHeaders(), body: JSON.stringify(body),
+    });
+    return handleResponse(response);
+  },
+  delete: async (endpoint) => {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: 'DELETE', headers: getHeaders(),
+    });
+    return handleResponse(response);
+  },
+};
+
+export const authService = {
+  login: async (username, password) => {
+    const formData = new URLSearchParams();
+    formData.append('username', username);
+    formData.append('password', password);
+    const response = await fetch(`${API_BASE_URL}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData,
+    });
+    return handleResponse(response);
+  },
+  register: (data) => api.post('/register', data),
+  getMe: () => api.get('/users/me/'),
+};
+
+export const cotizacionService = {
+  getAll: () => api.get('/cotizaciones/'),
+  getById: (id) => api.get(`/cotizaciones/${id}`),
+  create: (data) => api.post('/cotizaciones/', data),
+  facturar: (id) => api.post(`/cotizaciones/${id}/facturar`, {}),
+};
+
+export const clienteService = {
+  getAll: () => api.get('/clientes/'),
+  create: (data) => api.post('/clientes/', data),
+  update: (id, data) => api.put(`/clientes/${id}`, data), // ✅ HABILITADO
+  delete: (id) => api.delete(`/clientes/${id}`),
+};
+
+export const productoService = {
+  getAll: () => api.get('/productos/'),
+  create: (data) => api.post('/productos/', data),
+  update: (id, data) => api.put(`/productos/${id}`, data), // ✅ HABILITADO
+  delete: (id) => api.delete(`/productos/${id}`),
 };

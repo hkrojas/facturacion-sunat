@@ -1,254 +1,198 @@
-// frontend/src/pages/CotizacionesPage.jsx
- import React, { useState, useContext } from 'react'; // Import useContext
- import { Link } from 'react-router-dom';
- // --- IMPORTACIONES CORREGIDAS ---
- // Corregido: La ruta correcta desde 'pages' a 'components' es '../components/'
- import PageHeader from '../components/PageHeader.jsx';
- import Card from '../components/Card.jsx';
- import CotizacionesList from '../components/CotizacionesList.jsx';
- import ClientForm from '../components/ClientForm.jsx';
- import ProductsTable from '../components/ProductsTable.jsx';
- import Button from '../components/Button.jsx';
- // Corregido: La ruta correcta desde 'pages' a 'src' es '../'
- import { API_URL } from '../config.js';
- import { parseApiError } from '../utils/apiUtils.js';
- // Corregido: La ruta correcta desde 'pages' a 'context' es '../context/'
- import { AuthContext } from '../context/AuthContext.jsx';
- import { ToastContext } from '../context/ToastContext.jsx';
- // --- FIN IMPORTACIONES CORREGIDAS ---
- // Importar icono
- import { ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
- 
- 
- const CotizacionesPage = () => {
-     // Usar useContext para obtener token y addToast
-     const { token } = useContext(AuthContext);
-     const { addToast } = useContext(ToastContext);
-     const [activeTab, setActiveTab] = useState('crear');
- 
-     const [clientData, setClientData] = useState({
-         nombre_cliente: '', direccion_cliente: '', tipo_documento: 'DNI',
-         nro_documento: '', moneda: 'SOLES',
-     });
-     const [products, setProducts] = useState([
-         // Inicializar total con multiplicación simple
-         { descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }, // 1 * 0 = 0
-     ]);
-     const [loadingConsulta, setLoadingConsulta] = useState(false);
-     const [loadingSubmit, setLoadingSubmit] = useState(false);
-     const [refreshTrigger, setRefreshTrigger] = useState(0);
- 
-     // --- handleClientChange (sin cambios) ---
-     const handleClientChange = (e) => {
-         const { name, value } = e.target;
-         if (name) {
-              let finalValue = value;
-              if (['nombre_cliente', 'direccion_cliente', 'nro_documento'].includes(name)) {
-                 finalValue = value.toUpperCase();
-              }
-              setClientData(prev => ({ ...prev, [name]: finalValue }));
-         } else {
-              console.error("Evento de cambio no reconocido (falta name o value):", e);
-         }
-     };
- 
-     // --- handleConsultarDatos (sin cambios) ---
-      const handleConsultarDatos = async () => {
-         if (!clientData.nro_documento) {
-             addToast('Por favor, ingrese un número de documento.', 'error');
-             return;
-         }
-         setLoadingConsulta(true);
-         try {
-             const response = await fetch(`${API_URL}/consultar-documento`, {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                 body: JSON.stringify({
-                     tipo_documento: clientData.tipo_documento,
-                     numero_documento: clientData.nro_documento
-                 })
-             });
-             if (!response.ok) {
-                 const errData = await response.json();
-                 throw new Error(errData.detail || 'No se encontraron datos.');
-             }
-             const data = await response.json();
-             setClientData(prev => ({
-                 ...prev,
-                 nombre_cliente: data.nombre,
-                 direccion_cliente: data.direccion
-             }));
-             addToast('Datos encontrados con éxito.', 'success');
-         } catch (error) {
-             addToast(error.message, 'error');
-         } finally {
-             setLoadingConsulta(false);
-         }
-     };
- 
-     // --- handleProductChange: CALCULA EL TOTAL VISUAL (SIMPLE) ---
-      const handleProductChange = (index, e) => {
-         const { name, value } = e.target;
- 
-         setProducts(currentProducts =>
-             currentProducts.map((product, i) => {
-                 if (i === index) {
-                     const updatedProduct = {
-                         ...product,
-                         [name]: value
-                     };
- 
-                     // *** USA MULTIPLICACIÓN SIMPLE AQUÍ (SOLO PARA VISUALIZACIÓN) ***
-                     const unidades = parseFloat(updatedProduct.unidades) || 0;
-                     const precioUnitario = parseFloat(updatedProduct.precio_unitario) || 0;
-                     const nuevoTotalSimple = unidades * precioUnitario;
-                     // Redondear a 2 decimales para mostrar
-                     const nuevoTotalRedondeado = Math.round((nuevoTotalSimple + Number.EPSILON) * 100) / 100;
- 
-                     return {
-                         ...updatedProduct,
-                         // Convierte a mayúsculas si es descripción
-                         descripcion: name === 'descripcion' ? value.toUpperCase() : updatedProduct.descripcion,
-                         total: nuevoTotalRedondeado // Guarda el total simple VISUAL
-                     };
-                 }
-                 return product;
-             })
-         );
-     };
-     // --- FIN handleProductChange ---
- 
-     // --- addProduct (sin cambios) ---
-     const addProduct = () => {
-         // Nuevo producto con total 0 (multiplicación simple de 1 * 0)
-         setProducts([...products, {
-             descripcion: '',
-             unidades: 1,
-             precio_unitario: 0,
-             total: 0 // El total inicial es 1 * 0 = 0
-         }]);
-     };
-     // --- FIN addProduct ---
- 
-      const removeProduct = (index) => {
-         const newProducts = products.filter((_, i) => i !== index);
-         setProducts(newProducts);
-     };
- 
-     // --- handleSubmit CORREGIDO PARA NO ENVIAR TOTALES ---
-     const handleSubmit = async (e) => {
-         e.preventDefault();
-         setLoadingSubmit(true);
- 
-         // *** EL FRONTEND YA NO CALCULA EL MONTO TOTAL ***
-         // const monto_total_final = products.reduce((sum, p) => sum + (p.total || 0), 0);
-         // const monto_total_redondeado = Math.round((monto_total_final + Number.EPSILON) * 100) / 100;
- 
-         // Preparar datos para enviar (SIN TOTALES)
-         const cotizacionData = {
-             ...clientData,
-             // monto_total: monto_total_redondeado, // <-- ELIMINADO
-             productos: products.map(p => ({
-                 // Enviar solo los datos crudos. El backend calculará el 'total'.
-                 descripcion: p.descripcion,
-                 unidades: parseInt(p.unidades, 10) || 0, // Asegurar entero
-                 precio_unitario: parseFloat(p.precio_unitario) || 0, // Asegurar float
-                 // total: p.total // <-- ELIMINADO
-             }))
-         };
-         
-         // Limpiar el schema de productos de cualquier 'total' residual
-         // (Aunque el map anterior ya lo hace, esto es una doble seguridad)
-         cotizacionData.productos = cotizacionData.productos.map(({ total, ...rest }) => rest);
- 
-         try {
-             const response = await fetch(`${API_URL}/cotizaciones/`, {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`},
-                 body: JSON.stringify(cotizacionData)
-             });
-             if (!response.ok) {
-                 const errData = await response.json();
-                 const errorMessage = parseApiError(errData);
-                 throw new Error(errorMessage);
-             }
-             const newCotizacion = await response.json();
-             addToast(`¡Cotización N° ${newCotizacion.numero_cotizacion} creada!`, 'success');
- 
-             // 1. Limpiar Formulario
-             setClientData({ nombre_cliente: '', direccion_cliente: '', tipo_documento: 'DNI', nro_documento: '', moneda: 'SOLES' });
-             setProducts([{ descripcion: '', unidades: 1, precio_unitario: 0, total: 0 }]); // Resetear con total 0
- 
-             // 2. Forzar recarga de la lista
-             setRefreshTrigger(prev => prev + 1);
- 
-             // 3. Cambiar a la pestaña de ver lista
-             setActiveTab('ver');
- 
-         } catch (error) {
-             addToast(error.message, 'error');
-         } finally {
-             setLoadingSubmit(false);
-         }
-     };
- 
- 
-     // Estilos de pestañas (sin cambios)
-     const tabStyle = "px-6 py-3 font-semibold text-base border-b-2 transition-colors duration-300 focus:outline-none";
-     const activeTabStyle = "border-blue-600 text-blue-600 dark:border-blue-400 dark:text-blue-400";
-     const inactiveTabStyle = "border-transparent text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200";
- 
-     // Icono del encabezado
-     const headerIcon = <ClipboardDocumentListIcon className="h-8 w-8 text-blue-600 dark:text-blue-400" />;
- 
-     return (
-         <div className="bg-gray-100 dark:bg-dark-bg-body min-h-screen flex flex-col transition-colors duration-300">
-             <PageHeader title="Cotizaciones" icon={headerIcon}>
-                 <Link to="/dashboard" className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">
-                     Volver al Panel
-                 </Link>
-             </PageHeader>
- 
-             <main className="p-4 sm:p-8 flex-grow">
-                 <div className="w-full max-w-6xl mx-auto">
-                     <div className="flex border-b border-gray-300 dark:border-gray-700">
-                         <button onClick={() => setActiveTab('crear')} className={`${tabStyle} ${activeTab === 'crear' ? activeTabStyle : inactiveTabStyle}`}>
-                             Crear Cotización
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, FileText, Search, MoreVertical, FileCheck, AlertCircle, FileDown, Pencil } from 'lucide-react';
+import toast from 'react-hot-toast';
+
+import DashboardLayout from '../components/DashboardLayout';
+import Button from '../components/Button';
+import Input from '../components/Input';
+import LoadingSpinner from '../components/LoadingSpinner';
+import { cotizacionService } from '../utils/apiUtils';
+import { API_BASE_URL } from '../config';
+
+const StatusBadge = ({ status }) => {
+  const styles = {
+    pendiente: "bg-yellow-100 text-yellow-800 border-yellow-200",
+    facturada: "bg-green-100 text-green-800 border-green-200",
+    anulada: "bg-red-100 text-red-800 border-red-200",
+  };
+
+  const labels = {
+    pendiente: "Pendiente",
+    facturada: "Facturada",
+    anulada: "Anulada",
+  };
+
+  return (
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${styles[status] || "bg-gray-100"}`}>
+      {labels[status] || status}
+    </span>
+  );
+};
+
+const CotizacionesPage = () => {
+  const navigate = useNavigate();
+  const [cotizaciones, setCotizaciones] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  useEffect(() => {
+    cargarCotizaciones();
+  }, []);
+
+  const cargarCotizaciones = async () => {
+    try {
+      const data = await cotizacionService.getAll();
+      setCotizaciones(data);
+    } catch (error) {
+      toast.error("No se pudieron cargar las cotizaciones");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDescargarPDF = async (cotizacion) => {
+    const toastId = toast.loading("Generando PDF...");
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`${API_BASE_URL}/cotizaciones/${cotizacion.id}/pdf`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+
+      if (!response.ok) throw new Error("Error al generar PDF");
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Cotizacion_${cotizacion.serie}-${cotizacion.correlativo}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      
+      toast.success("PDF descargado", { id: toastId });
+    } catch (error) {
+      toast.error("Error al descargar PDF", { id: toastId });
+      console.error(error);
+    }
+  };
+
+  const filteredData = cotizaciones.filter(c => 
+    c.cliente?.razon_social?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.serie?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <DashboardLayout 
+      title="Gestión de Cotizaciones" 
+      action={
+        <Button icon={Plus} onClick={() => navigate('/cotizaciones/nueva')}>
+          Nueva Cotización
+        </Button>
+      }
+    >
+      <div className="card p-4 mb-6 flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <div className="w-full sm:w-96">
+          <Input 
+            placeholder="Buscar por cliente o serie..." 
+            icon={Search}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            containerClassName="mb-0"
+          />
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        {loading ? (
+          <div className="p-12 flex justify-center">
+            <LoadingSpinner className="w-8 h-8 text-primary-600" />
+          </div>
+        ) : filteredData.length === 0 ? (
+          <div className="p-12 text-center text-surface-500">
+            <FileText className="w-12 h-12 mx-auto mb-3 opacity-20" />
+            <p>No se encontraron cotizaciones.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-surface-50 dark:bg-surface-900 border-b border-surface-200 dark:border-surface-700">
+                <tr>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Serie</th>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Cliente</th>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Emisión</th>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300 text-right">Total</th>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300 text-center">Estado</th>
+                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-100 dark:divide-surface-700">
+                {filteredData.map((cot) => (
+                  <tr key={cot.id} className="hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors">
+                    <td className="px-6 py-4 font-medium text-surface-900 dark:text-white">
+                      {cot.serie}-{String(cot.correlativo).padStart(8, '0')}
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-medium text-surface-900 dark:text-white">
+                        {cot.cliente?.razon_social || "Cliente General"}
+                      </p>
+                      <p className="text-xs text-surface-500">
+                        {cot.cliente?.numero_documento}
+                      </p>
+                    </td>
+                    <td className="px-6 py-4 text-surface-600 dark:text-surface-400">
+                      {new Date(cot.fecha_emision).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right font-medium text-surface-900 dark:text-white">
+                      S/ {Number(cot.total_venta).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <StatusBadge status={cot.estado} />
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex justify-end gap-2">
+                         {/* Botón PDF */}
+                         <button 
+                            onClick={() => handleDescargarPDF(cot)}
+                            className="p-1.5 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700 rounded-md transition-colors"
+                            title="Descargar PDF"
+                         >
+                            <FileDown className="w-4 h-4" />
                          </button>
-                         <button onClick={() => setActiveTab('ver')} className={`${tabStyle} ${activeTab === 'ver' ? activeTabStyle : inactiveTabStyle}`}>
-                             Ver Cotizaciones
-                         </button>
-                     </div>
-                     <Card className="rounded-t-none shadow-lg">
-                         {activeTab === 'crear' && (
-                             <form onSubmit={handleSubmit} className="space-y-10">
-                                 <ClientForm
-                                      clientData={clientData}
-                                      handleClientChange={handleClientChange}
-                                      handleConsultar={handleConsultarDatos}
-                                      loadingConsulta={loadingConsulta}
-                                  />
-                                 <ProductsTable
-                                     products={products}
-                                     handleProductChange={handleProductChange} // Pasa el manejador (calcula total visual)
-                                     addProduct={addProduct}
-                                     removeProduct={removeProduct}
-                                 />
-                                 <div className="pt-6 text-right border-t border-gray-200 dark:border-gray-700">
-                                     <Button type="submit" variant="primary" loading={loadingSubmit} className="text-lg px-8 py-3">
-                                         Guardar Cotización
-                                     </Button>
-                                 </div>
-                             </form>
+
+                         {/* Botón Editar (Solo si pendiente) */}
+                         {cot.estado === 'pendiente' && (
+                            <button 
+                              onClick={() => navigate(`/cotizaciones/editar/${cot.id}`)}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md transition-colors"
+                              title="Editar"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
                          )}
-                         {activeTab === 'ver' && (
-                             <CotizacionesList refreshTrigger={refreshTrigger} />
+
+                         {/* Botón Facturar (Solo si pendiente) */}
+                         {cot.estado === 'pendiente' && (
+                            <button 
+                              onClick={() => navigate(`/cotizaciones/${cot.id}/facturar`)} // O tu lógica de modal de facturación
+                              className="p-1.5 text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 rounded-md transition-colors"
+                              title="Facturar"
+                            >
+                              <FileCheck className="w-4 h-4" />
+                            </button>
                          )}
-                     </Card>
-                 </div>
-             </main>
-         </div>
-     );
- };
- 
- export default CotizacionesPage;
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </DashboardLayout>
+  );
+};
+
+export default CotizacionesPage;

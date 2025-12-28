@@ -1,65 +1,41 @@
-/* frontend/src/index.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/*
-  Aplicamos la fuente a todo el body para asegurar consistencia
-  y un suavizado de fuente (antialiasing) que se ve mejor en las pantallas.
-*/
 @layer base {
   body {
-    font-family: 'Inter', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    @apply font-sans bg-surface-50 text-surface-900 antialiased;
+    /* Modo oscuro */
+    @apply dark:bg-surface-950 dark:text-surface-100;
+  }
+
+  /* Scrollbar personalizado */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-300 dark:bg-surface-700 rounded-full hover:bg-surface-400;
   }
 }
 
-/* --- SECCIÓN DE ANIMACIONES --- */
-@layer utilities {
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-
-  @keyframes fadeInUp {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .animate-fade-in {
-    animation: fadeIn 0.5s ease-out forwards;
-  }
-
-  .animate-fade-in-up {
-    animation: fadeInUp 0.5s ease-out forwards;
-  }
-
-  .staggered-fade-in-up {
-    animation: fadeInUp 0.6s ease-out forwards;
-    animation-delay: var(--stagger-delay, 0s);
-    opacity: 0; /* Empieza invisible */
-  }
-}
-
-/* --- CORRECCIÓN AÑADIDA --- */
-/*
-  Esta clase personalizada (que tenías en el proyecto anterior)
-  es necesaria para que el texto largo en las celdas de la tabla
-  se corte con "..." en lugar de desbordarse o saltar de línea.
-*/
 @layer components {
-  .truncate-cell {
-    max-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  /* Clase para tarjetas (Glassmorphism sutil) */
+  .card {
+    @apply bg-white dark:bg-surface-800 rounded-xl shadow-soft border border-surface-100 dark:border-surface-700;
+  }
+  
+  /* Inputs y Controles de Formulario */
+  .input-field {
+    @apply w-full px-4 py-2.5 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-900 text-surface-900 dark:text-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 transition-all outline-none placeholder:text-surface-400;
+  }
+
+  .btn {
+    @apply px-4 py-2.5 rounded-lg font-medium transition-all duration-200 active:scale-95 flex items-center justify-center gap-2;
   }
 }
-

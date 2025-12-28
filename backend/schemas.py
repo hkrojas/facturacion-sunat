@@ -1,295 +1,141 @@
-# backend/schemas.py
-
-from pydantic import BaseModel, ConfigDict, Field, EmailStr
+from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
 from typing import List, Optional, Any
-from datetime import datetime, date
+from datetime import datetime
+from decimal import Decimal
+import models
 
-# --- Esquemas de Producto ---
-class ProductoBase(BaseModel):
-    descripcion: str = Field(..., min_length=1)
-    unidades: int = Field(..., gt=0)
-    precio_unitario: float = Field(..., ge=0)
-    # --- CORRECCIÓN ---
-    # 'total' ahora es opcional. El backend lo calculará.
-    total: Optional[float] = None 
+# ==========================================
+# USUARIOS (Autenticación y Perfil)
+# ==========================================
 
-class ProductoCreate(ProductoBase):
-    pass # Hereda 'total' como opcional
-
-class Producto(ProductoBase):
-    id: int
-    cotizacion_id: int
-    total: float # En la respuesta (BD), 'total' sí es requerido y siempre existirá.
-    model_config = ConfigDict(from_attributes=True)
-
-# --- Esquemas para Notas de Crédito/Débito ---
-class NotaDB(BaseModel):
-    success: bool
-    sunat_response: Optional[dict] = None
-    sunat_hash: Optional[str] = None
-    payload_enviado: Optional[dict] = None
-
-class Nota(NotaDB):
-    id: int
-    owner_id: int
-    comprobante_afectado_id: int
-    tipo_doc: str
-    serie: str
-    correlativo: str
-    fecha_emision: datetime
-    cod_motivo: str
-    fecha_creacion: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-class NotaCreateAPI(BaseModel):
-    comprobante_afectado_id: int
-    tipo_nota: str
-    cod_motivo: str
-    descripcion_motivo: str
-
-# --- Esquemas de Comprobante (Actualizado) ---
-class ComprobanteBase(BaseModel):
-    success: bool
-    sunat_response: Optional[dict] = None
-    sunat_hash: Optional[str] = None
-    payload_enviado: Optional[dict] = None
-class ComprobanteCreate(ComprobanteBase):
-    tipo_doc: str
-    serie: str
-    correlativo: str
-    fecha_emision: datetime
-class Comprobante(ComprobanteBase):
-    id: int
-    cotizacion_id: Optional[int] = None
-    owner_id: int
-    tipo_doc: str
-    serie: str
-    correlativo: str
-    fecha_emision: datetime
-    fecha_creacion: datetime
-    notas_afectadas: List[Nota] = []
-    model_config = ConfigDict(from_attributes=True)
-
-# --- Esquemas de Cotización ---
-class CotizacionBase(BaseModel):
-    nombre_cliente: str = Field(..., min_length=1)
-    direccion_cliente: str
-    tipo_documento: str
-    nro_documento: str = Field(..., min_length=1)
-    moneda: str
-    # --- CORRECCIÓN ---
-    # 'monto_total' ahora es opcional. El backend lo calculará.
-    monto_total: Optional[float] = None
-
-class CotizacionInList(CotizacionBase):
-    id: int
-    owner_id: int
-    numero_cotizacion: str
-    fecha_creacion: datetime
-    comprobante: Optional[Comprobante] = None
-    monto_total: float # En la respuesta (BD), 'monto_total' sí es requerido.
-    model_config = ConfigDict(from_attributes=True)
-
-class CotizacionCreate(CotizacionBase):
-    productos: List[ProductoCreate] = Field(..., min_length=1)
-
-class Cotizacion(CotizacionBase):
-    id: int
-    owner_id: int
-    numero_cotizacion: str
-    fecha_creacion: datetime
-    productos: List[Producto] = []
-    comprobante: Optional[Comprobante] = None
-    monto_total: float # En la respuesta (BD), 'monto_total' sí es requerido.
-    model_config = ConfigDict(from_attributes=True)
-
-# --- Esquemas de Perfil y Usuario ---
-class BankAccount(BaseModel):
-    banco: str
-    tipo_cuenta: Optional[str] = None
-    moneda: Optional[str] = None
-    cuenta: str
-    cci: str
-class ProfileUpdate(BaseModel):
-    business_name: Optional[str] = None
-    business_address: Optional[str] = None
-    business_ruc: Optional[str] = None
-    business_phone: Optional[str] = None
-    primary_color: Optional[str] = None
-    pdf_note_1: Optional[str] = None
-    pdf_note_1_color: Optional[str] = None
-    pdf_note_2: Optional[str] = None
-    bank_accounts: Optional[List[BankAccount]] = None
-    apisperu_user: Optional[str] = None
-    apisperu_password: Optional[str] = None
 class UserBase(BaseModel):
     email: EmailStr
+    nombre_completo: Optional[str] = None
+    rol: str = "vendedor"
+
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8)
-class User(UserBase):
-    id: int
-    is_active: bool
-    is_admin: bool
-    creation_date: datetime
-    deactivation_reason: Optional[str] = None
+    password: str
+
+class UserUpdateProfile(BaseModel):
+    """Esquema para actualizar todos los campos de configuración."""
+    nombre_completo: Optional[str] = None
     business_name: Optional[str] = None
-    business_address: Optional[str] = None
     business_ruc: Optional[str] = None
+    business_address: Optional[str] = None
     business_phone: Optional[str] = None
-    logo_filename: Optional[str] = None
+    # Branding y PDF
     primary_color: Optional[str] = None
     pdf_note_1: Optional[str] = None
     pdf_note_1_color: Optional[str] = None
-    pdf_note_2: Optional[str] = None
-    bank_accounts: Optional[List[BankAccount]] = None
-    cotizaciones: List[CotizacionInList] = []
-    apisperu_user: Optional[str] = None
-    model_config = ConfigDict(from_attributes=True)
+    bank_accounts: Optional[List[dict]] = None 
+    # Configuración de API Facturación
+    apisperu_token: Optional[str] = None
+    apisperu_url: Optional[str] = None
 
-# --- Esquemas de Admin ---
-class AdminDashboardStats(BaseModel):
-    total_users: int
-    active_users: int
-    total_cotizaciones: int
-    new_users_last_30_days: int
-class AdminUserView(BaseModel):
+class UserResponse(UserBase):
     id: int
-    email: str
-    is_active: bool
-    is_admin: bool
-    creation_date: datetime
-    cotizaciones_count: int
-    deactivation_reason: Optional[str] = None
-    model_config = ConfigDict(from_attributes=True)
-class UserStatusUpdate(BaseModel):
-    is_active: bool
-    deactivation_reason: Optional[str] = None
-class AdminUserDetailView(UserBase):
-    id: int
-    is_active: bool
-    is_admin: bool
-    creation_date: datetime
-    deactivation_reason: Optional[str] = None
     business_name: Optional[str] = None
-    business_address: Optional[str] = None
     business_ruc: Optional[str] = None
+    business_address: Optional[str] = None
     business_phone: Optional[str] = None
-    logo_filename: Optional[str] = None
     primary_color: Optional[str] = None
+    logo_filename: Optional[str] = None
     pdf_note_1: Optional[str] = None
     pdf_note_1_color: Optional[str] = None
-    pdf_note_2: Optional[str] = None
-    bank_accounts: Optional[List[BankAccount]] = None
+    bank_accounts: Optional[Any] = None
+    apisperu_token: Optional[str] = None
+    apisperu_url: Optional[str] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
-# --- Esquemas de Token y DocumentoConsulta ---
 class Token(BaseModel):
     access_token: str
     token_type: str
+
 class TokenData(BaseModel):
-    email: Optional[EmailStr] = None
-class DocumentoConsulta(BaseModel):
-    tipo_documento: str
-    numero_documento: str
+    email: Optional[str] = None
 
-# --- Esquemas para Guía de Remisión ---
-class BienGuia(BaseModel):
-    descripcion: str
-    cantidad: float
-    unidad: str
-class DestinatarioGuia(BaseModel):
-    tipoDoc: str
-    numDoc: str
-    rznSocial: str
-class DireccionGuia(BaseModel):
-    ubigueo: str
-    direccion: str
-class ConductorGuia(BaseModel):
-    tipo: str = "Principal"
-    tipoDoc: str
-    numDoc: str
-    nombres: str
-    apellidos: str
-    licencia: str
-class TransportistaGuia(BaseModel):
-    tipoDoc: Optional[str] = None
-    numDoc: Optional[str] = None
-    rznSocial: Optional[str] = None
-    placa: Optional[str] = None
-class GuiaRemisionCreateAPI(BaseModel):
-    destinatario: DestinatarioGuia
-    codTraslado: str
-    modTraslado: str
-    fecTraslado: date
-    pesoTotal: float
-    partida: DireccionGuia
-    llegada: DireccionGuia
-    transportista: Optional[TransportistaGuia] = None
-    conductor: Optional[ConductorGuia] = None
-    bienes: List[BienGuia]
-class GuiaRemisionDB(BaseModel):
-    success: bool
-    sunat_response: Optional[dict] = None
-    sunat_hash: Optional[str] = None
-    payload_enviado: Optional[dict] = None
-class GuiaRemision(GuiaRemisionDB):
+# ==========================================
+# CLIENTES
+# ==========================================
+
+class ClienteBase(BaseModel):
+    tipo_documento: str = "1"
+    numero_documento: str = Field(..., min_length=8, max_length=15)
+    razon_social: str = Field(...)
+    nombre_comercial: Optional[str] = None
+    direccion: Optional[str] = None
+    ubigeo: Optional[str] = None
+    email: Optional[str] = None
+    telefono: Optional[str] = None
+
+class ClienteCreate(ClienteBase):
+    pass
+
+class ClienteResponse(ClienteBase):
     id: int
-    owner_id: int
-    tipo_doc: str
+    model_config = ConfigDict(from_attributes=True)
+
+# ==========================================
+# PRODUCTOS
+# ==========================================
+
+class ProductoBase(BaseModel):
+    codigo_interno: Optional[str] = None
+    nombre: str
+    descripcion: Optional[str] = None
+    precio_unitario: Decimal = Field(..., gt=0)
+    unidad_medida: str = "NIU"
+    tipo_afectacion_igv: str = "10"
+
+class ProductoCreate(ProductoBase):
+    pass
+
+class ProductoResponse(ProductoBase):
+    id: int
+    valor_unitario: Decimal
+    model_config = ConfigDict(from_attributes=True)
+
+# ==========================================
+# COTIZACIONES
+# ==========================================
+
+class CotizacionItemCreate(BaseModel):
+    producto_id: Optional[int] = None
+    descripcion: str
+    cantidad: Decimal = Field(..., gt=0)
+    precio_unitario: Decimal = Field(..., gt=0)
+
+class CotizacionItemResponse(CotizacionItemCreate):
+    id: int
+    valor_unitario: Decimal
+    total_base_igv: Decimal
+    total_igv: Decimal
+    total_item: Decimal
+    model_config = ConfigDict(from_attributes=True)
+
+class CotizacionCreate(BaseModel):
+    cliente_id: int
+    fecha_vencimiento: Optional[datetime] = None
+    moneda: str = "PEN"
+    tipo_comprobante: str = "00"
+    items: List[CotizacionItemCreate]
+
+class CotizacionResponse(BaseModel):
+    id: int
     serie: str
-    correlativo: str
+    correlativo: Optional[int] = 0 
     fecha_emision: datetime
-    fecha_creacion: datetime
+    fecha_vencimiento: Optional[datetime]
+    estado: str
+    cliente: ClienteResponse
+    usuario: UserResponse
+    items: List[CotizacionItemResponse]
+    total_gravada: Decimal
+    total_igv: Decimal
+    total_venta: Decimal
+    sunat_xml_url: Optional[str] = None
+    sunat_pdf_url: Optional[str] = None
+    sunat_error: Optional[str] = None
+
     model_config = ConfigDict(from_attributes=True)
-
-# --- Esquemas para Facturación ---
-class FacturarRequest(BaseModel):
-    tipo_comprobante: str
-class ProductoFacturaCreate(BaseModel):
-    descripcion: str
-    unidades: int
-    precio_unitario: float
-class FacturaCreateDirect(BaseModel):
-    tipo_comprobante: str
-    nombre_cliente: str
-    direccion_cliente: str
-    tipo_documento_cliente: str
-    nro_documento_cliente: str
-    moneda: str
-    productos: List[ProductoFacturaCreate]
-
-# --- NUEVOS ESQUEMAS PARA RESÚMENES Y BAJAS ---
-class ResumenDiarioDB(BaseModel):
-    ticket: Optional[str] = None
-    success: bool
-    sunat_response: Optional[dict] = None
-    payload_enviado: Optional[dict] = None
-
-class ResumenDiario(ResumenDiarioDB):
-    id: int
-    owner_id: int
-    fecha_resumen: datetime
-    correlativo: str
-    fecha_creacion: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-class ComunicacionBajaDB(BaseModel):
-    ticket: Optional[str] = None
-    success: bool
-    sunat_response: Optional[dict] = None
-    payload_enviado: Optional[dict] = None
-
-class ComunicacionBaja(ComunicacionBajaDB):
-    id: int
-    owner_id: int
-    fecha_comunicacion: datetime
-    correlativo: str
-    fecha_creacion: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-class BajaItem(BaseModel):
-    comprobante_id: int
-    motivo: str
-
-class ComunicacionBajaCreateAPI(BaseModel):
-    items_a_dar_de_baja: List[BajaItem]

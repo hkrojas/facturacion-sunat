@@ -1,43 +1,39 @@
-// src/components/Button.jsx
 import React from 'react';
+import LoadingSpinner from './LoadingSpinner';
 
-const Button = ({
-  children,
-  onClick,
-  type = 'button',
-  variant = 'primary',
-  disabled = false,
-  loading = false,
+const Button = ({ 
+  children, 
+  variant = 'primary', // primary, secondary, danger, ghost
+  isLoading = false, 
+  icon: Icon,
   className = '',
-  icon, // Nueva propiedad para el ícono
+  disabled,
+  ...props 
 }) => {
-  const baseStyles = 'inline-flex items-center justify-center font-bold py-2 px-4 rounded-md transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed';
-
-  const variantStyles = {
-    primary: 'bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500 shadow-md hover:shadow-lg transform hover:-translate-y-0.5 active:scale-95',
-    secondary: 'bg-gray-200 hover:bg-gray-300 text-gray-800 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-gray-200 focus:ring-gray-500',
-    danger: 'bg-red-600 hover:bg-red-700 text-white focus:ring-red-500',
-    success: 'bg-green-600 hover:bg-green-700 text-white focus:ring-green-500',
-    ghost: 'bg-transparent border border-gray-400 text-gray-600 hover:bg-gray-200 hover:text-gray-800 dark:border-gray-500 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200 focus:ring-gray-500',
+  
+  const baseStyles = "btn focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-surface-900 disabled:opacity-50 disabled:cursor-not-allowed";
+  
+  const variants = {
+    primary: "bg-primary-600 hover:bg-primary-700 text-white shadow-lg shadow-primary-600/30 focus:ring-primary-500",
+    secondary: "bg-white dark:bg-surface-800 text-surface-700 dark:text-surface-200 border border-surface-200 dark:border-surface-600 hover:bg-surface-50 dark:hover:bg-surface-700 focus:ring-surface-400",
+    danger: "bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/30 focus:ring-red-500",
+    ghost: "bg-transparent hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-600 dark:text-surface-300",
   };
 
-  const spinner = (
-    <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-    </svg>
-  );
-
   return (
-    <button
-      type={type}
-      onClick={onClick}
-      disabled={disabled || loading}
-      className={`${baseStyles} ${variantStyles[variant]} ${className}`}
+    <button 
+      className={`${baseStyles} ${variants[variant]} ${className}`}
+      disabled={isLoading || disabled}
+      {...props}
     >
-      {loading && spinner}
-      {icon && !loading && <span className="mr-2 -ml-1 h-5 w-5">{icon}</span>}
-      {children}
+      {isLoading ? (
+        <LoadingSpinner className="w-5 h-5" />
+      ) : (
+        <>
+          {Icon && <Icon className="w-5 h-5" />}
+          {children}
+        </>
+      )}
     </button>
   );
 };

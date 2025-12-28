@@ -81,4 +81,3 @@ def get_db():
     finally:
         # Siempre cerrar la sesión al finalizar la solicitud (incluso si hubo error)
         db.close()
-

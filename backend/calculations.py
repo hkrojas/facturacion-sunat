@@ -1,160 +1,115 @@
-# backend/calculations.py
-# ARCHIVO CORREGIDO (ESTRATEGIA INVERSA PARA VALIDACIÓN ESTRICTA SUNAT)
-# Ajuste clave: El Valor Unitario (Payload) se recalcula desde el Valor Venta Total / Cantidad
-# para garantizar que Cantidad * ValorUnitario == ValorVenta sin errores de redondeo.
+from decimal import Decimal, ROUND_HALF_UP
 
-from decimal import Decimal, ROUND_HALF_UP, getcontext
-from typing import List, Union, Dict, Any
+# ==========================================
+# CONFIGURACIÓN MATEMÁTICA
+# ==========================================
 
-# Ajustar la precisión global para operaciones con Decimal
-getcontext().prec = 50
+# Tasa de IGV (18%)
+IGV_RATE = Decimal("0.18")
+FACTOR_IGV = Decimal("1.00") + IGV_RATE # 1.18
+TOTAL_PRECISION = Decimal("0.01") # Precisión a 2 decimales
 
-# --- CONSTANTES DE CÁLCULO ---
-# 10 decimales para el XML/UBL (Estándar UBL 2.1 permite hasta 10)
-UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION = Decimal('0.0000000000') 
-# 10 decimales para el cálculo base inicial
-UNIT_PRICE_NO_IGV_CALC_PRECISION = Decimal('0.0000000000')    
-TOTAL_PRECISION = Decimal('0.00')
-TASA_IGV = Decimal('0.18')
-FACTOR_IGV = Decimal('1.18')
-
-# --- FUNCIONES AUXILIARES ---
-
-def to_decimal(value: Any) -> Decimal:
-    """Convierte un float, str o int a Decimal, manejando valores nulos o vacíos."""
-    if value is None or value == '':
-        return Decimal('0')
+def to_decimal(val):
+    """Convierte un valor a Decimal de forma segura."""
+    if val is None:
+        return Decimal("0.00")
+    if isinstance(val, Decimal):
+        return val
     try:
-        # Normalizar string para asegurar que use '.' como separador decimal
-        str_value = str(value).replace(',', '.')
-        return Decimal(str_value).normalize()
-    except Exception:
-        print(f"WARN: No se pudo convertir '{value}' a Decimal. Usando 0.")
-        return Decimal('0')
+        return Decimal(str(val))
+    except (ValueError, TypeError):
+        return Decimal("0.00")
 
-# --- LÓGICA DE CÁLCULO V3 (ESTRATEGIA INVERSA) ---
+def redondear(valor: Decimal) -> Decimal:
+    """Redondeo estricto a 2 decimales (estándar SUNAT)."""
+    if not isinstance(valor, Decimal):
+        valor = to_decimal(valor)
+    return valor.quantize(TOTAL_PRECISION, rounding=ROUND_HALF_UP)
 
-def get_line_totals_v3(
-    cantidad_in: Any, 
-    precio_unitario_con_igv_in: Any
-) -> Dict[str, Decimal]:
-    """
-    Calcula los totales de una línea priorizando la consistencia:
-    Cantidad * ValorUnitario = ValorVenta (validación SUNAT 3271).
-    """
+def calcular_item(cantidad: Decimal, precio_con_igv: Decimal):
+    """Calcula el desglose de un item a partir de su precio final."""
+    qty = to_decimal(cantidad)
+    precio_final = to_decimal(precio_con_igv)
+
+    # 1. Valor Unitario (Base Imponible Unitaria)
+    valor_unitario = precio_final / FACTOR_IGV
+    valor_unitario = redondear(valor_unitario)
+
+    # 2. Total Base
+    total_base = valor_unitario * qty
+    total_base = redondear(total_base)
+
+    # 3. Total Venta
+    total_item = precio_final * qty
+    total_item = redondear(total_item)
+
+    # 4. Total IGV
+    total_igv = total_item - total_base
     
-    cantidad_d = to_decimal(cantidad_in)
-    precio_unitario_con_igv_d = to_decimal(precio_unitario_con_igv_in)
-
-    if cantidad_d <= 0 or precio_unitario_con_igv_d < 0:
-        return {
-            'valor_unitario_sin_igv_payload': Decimal('0'),
-            'valor_unitario_sin_igv_calculo': Decimal('0'),
-            'mto_valor_venta_linea': Decimal('0'),
-            'igv_linea': Decimal('0'),
-            'precio_total_linea': Decimal('0'),
-            'mto_precio_unitario_con_igv': Decimal('0'),
-        }
-
-    # 1. Calcular Valor Unitario SIN IGV Teórico (Alta precisión)
-    valor_unitario_sin_igv_teorico = (precio_unitario_con_igv_d / FACTOR_IGV).quantize(
-        UNIT_PRICE_NO_IGV_CALC_PRECISION, rounding=ROUND_HALF_UP
-    )
-
-    # 2. Calcular Valor de Venta de la línea (Base Imponible)
-    #    Se usa el teórico * cantidad y se redondea a 2 decimales.
-    #    Este es el "mtoValorVenta" definitivo que irá al XML.
-    mto_valor_venta_linea_d = (cantidad_d * valor_unitario_sin_igv_teorico).quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
-
-    # 3. ESTRATEGIA INVERSA: Recalcular el Valor Unitario para el Payload (XML)
-    #    Para cumplir la validación 3271 (ValVenta = Cant * ValUnit),
-    #    derivamos el Valor Unitario exacto dividiendo la Base Imponible redondeada entre la Cantidad.
-    if cantidad_d > 0:
-        valor_unitario_sin_igv_payload_d = (mto_valor_venta_linea_d / cantidad_d).quantize(
-            UNIT_PRICE_NO_IGV_PAYLOAD_PRECISION, rounding=ROUND_HALF_UP
-        )
-    else:
-        valor_unitario_sin_igv_payload_d = Decimal('0')
-
-    # 4. Calcular IGV de la línea (Base * 0.18)
-    igv_linea_d = (mto_valor_venta_linea_d * TASA_IGV).quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
-
-    # 5. Calcular Precio Total de la línea (Base + IGV)
-    precio_total_linea_d = (mto_valor_venta_linea_d + igv_linea_d).quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
-
-    # 6. Calcular Precio Unitario CON IGV (mtoPrecioUnitario) para Referencia
-    #    Se deriva del total / cantidad
-    if cantidad_d > 0:
-        mto_precio_unitario_con_igv_d = (precio_total_linea_d / cantidad_d).quantize(
-            TOTAL_PRECISION, rounding=ROUND_HALF_UP
-        )
-    else:
-        mto_precio_unitario_con_igv_d = Decimal('0.00')
-
     return {
-        'valor_unitario_sin_igv_payload': valor_unitario_sin_igv_payload_d,
-        'valor_unitario_sin_igv_calculo': valor_unitario_sin_igv_teorico, # Guardamos el teórico por si acaso
-        'mto_valor_venta_linea': mto_valor_venta_linea_d,
-        'igv_linea': igv_linea_d,
-        'precio_total_linea': precio_total_linea_d,
-        'mto_precio_unitario_con_igv': mto_precio_unitario_con_igv_d,
+        "cantidad": qty,
+        "precio_unitario": precio_final,
+        "valor_unitario": valor_unitario,
+        "total_base_igv": total_base,
+        "total_igv": total_igv,
+        "total_item": total_item,
+        "unidad_medida": "NIU",
+        "tipo_afectacion_igv": "10" 
     }
 
+# --- FUNCIONES DE SOPORTE PARA PDF GENERATOR (V3) ---
 
-def calculate_cotizacion_totals_v3(
-    productos: List[Any] 
-) -> Dict[str, Any]:
-    """
-    Calcula los totales V3 para una lista de productos.
-    """
-    
-    total_gravado_acumulado_d = Decimal('0.00')
-    total_igv_acumulado_d = Decimal('0.00')
-    line_totals_list = []
+def get_line_totals_v3(cantidad, precio_unitario_con_igv):
+    """Función de compatibilidad para el generador de PDF."""
+    calc = calcular_item(cantidad, precio_unitario_con_igv)
+    return {
+        'mto_valor_unitario': calc['valor_unitario'],
+        'mto_precio_unitario_con_igv': calc['precio_unitario'],
+        'valor_venta_linea': calc['total_base_igv'],
+        'igv_linea': calc['total_igv'],
+        'precio_total_linea': calc['total_item']
+    }
 
-    for prod in productos:
-        cantidad_in = None
-        precio_unitario_con_igv_in = None
+def calculate_cotizacion_totals_v3(items):
+    """Calcula totales globales de una lista de items para el PDF."""
+    total_gravada = Decimal("0.00")
+    total_igv = Decimal("0.00")
+    monto_total = Decimal("0.00")
+    line_totals = []
 
-        # Manejar objetos Pydantic o dicts
-        if hasattr(prod, 'unidades') and hasattr(prod, 'precio_unitario'):
-            cantidad_in = prod.unidades
-            precio_unitario_con_igv_in = prod.precio_unitario
-        elif isinstance(prod, dict):
-            cantidad_in = prod.get('unidades')
-            precio_unitario_con_igv_in = prod.get('precio_unitario')
+    for item in items:
+        qty = item.get('unidades', 0)
+        price = item.get('precio_unitario', 0)
         
-        if cantidad_in is None or precio_unitario_con_igv_in is None:
-            print(f"WARN: Item de producto inválido omitido: {prod}")
-            line_totals_list.append(get_line_totals_v3(0, 0))
-            continue
-
-        line_totals = get_line_totals_v3(cantidad_in, precio_unitario_con_igv_in)
-        line_totals_list.append(line_totals)
+        calc = get_line_totals_v3(qty, price)
+        line_totals.append(calc)
         
-        total_gravado_acumulado_d += line_totals['mto_valor_venta_linea']
-        total_igv_acumulado_d += line_totals['igv_linea']
-
-    # Totales finales
-    monto_total_v3 = (total_gravado_acumulado_d + total_igv_acumulado_d).quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
-    total_gravado_v3 = total_gravado_acumulado_d.quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
-    total_igv_v3 = total_igv_acumulado_d.quantize(
-        TOTAL_PRECISION, rounding=ROUND_HALF_UP
-    )
+        total_gravada += calc['valor_venta_linea']
+        total_igv += calc['igv_linea']
+        monto_total += calc['precio_total_linea']
 
     return {
-        'monto_total_v3': monto_total_v3,
-        'total_gravado_v3': total_gravado_v3,
-        'total_igv_v3': total_igv_v3,
-        'line_totals': line_totals_list,
+        'total_gravado_v3': total_gravada,
+        'total_igv_v3': total_igv,
+        'monto_total_v3': monto_total,
+        'line_totals': line_totals
+    }
+
+def sumarizar_cotizacion(items_procesados: list):
+    """Suma totales para la cabecera de la cotización."""
+    total_gravada = Decimal("0.00")
+    total_igv = Decimal("0.00")
+    total_venta = Decimal("0.00")
+
+    for item in items_procesados:
+        total_gravada += item["total_base_igv"]
+        total_igv += item["total_igv"]
+        total_venta += item["total_item"]
+
+    return {
+        "total_gravada": total_gravada,
+        "total_igv": total_igv,
+        "total_venta": total_venta,
+        "total_exonerada": Decimal("0.00"),
+        "total_inafecta": Decimal("0.00")
     }
