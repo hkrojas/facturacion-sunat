@@ -1,71 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
+import { loginUser, registerUser, getUserProfile } from '../utils/apiUtils';
 
-export const AuthContext = createContext(null);
-
-export const AuthProvider = ({ children }) => {
-  // Inicialización segura: Si falla al leer, inicia como null
-  const [user, setUser] = useState(() => {
-    try {
-      const storedUser = localStorage.getItem('user');
-      return storedUser ? JSON.parse(storedUser) : null;
-    } catch (e) {
-      console.warn("Error al leer usuario, limpiando...", e);
-      localStorage.removeItem('user');
-      return null;
-    }
-  });
-
-  const [token, setToken] = useState(() => localStorage.getItem('token'));
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Simplemente verificamos si hay token para decidir el estado inicial
-    // No hacemos llamadas a API aquí para evitar bloqueos
-    const currentToken = localStorage.getItem('token');
-    if (currentToken) {
-      setIsAuthenticated(true);
-    } else {
-      setIsAuthenticated(false);
-      setUser(null);
-    }
-    // IMPORTANTE: Liberar la carga inmediatamente para mostrar la UI
-    setIsLoading(false);
-  }, []);
-
-  const login = (newToken, userData = null) => {
-    localStorage.setItem('token', newToken);
-    setToken(newToken);
-    setIsAuthenticated(true);
-    if (userData) {
-      setUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
-    }
-  };
-
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setToken(null);
-    setUser(null);
-    setIsAuthenticated(false);
-    // Usamos window.location para forzar una limpieza completa de memoria
-    window.location.href = '/login';
-  };
-
-  return (
-    <AuthContext.Provider value={{ 
-      user, 
-      token, 
-      isAuthenticated, 
-      isLoading, 
-      login, 
-      logout 
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
+const AuthContext = createContext();
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -73,4 +9,82 @@ export const useAuth = () => {
     throw new Error('useAuth debe ser usado dentro de un AuthProvider');
   }
   return context;
+};
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        // Usamos la nueva función exportada
+        const userData = await getUserProfile();
+        setUser(userData);
+      } catch (error) {
+        console.error('Error verificando sesión:', error);
+        localStorage.removeItem('token');
+        setUser(null);
+      }
+    }
+    setLoading(false);
+  };
+
+  const login = async (credentials) => {
+    try {
+      // Usamos la nueva función exportada
+      const data = await loginUser(credentials);
+      localStorage.setItem('token', data.access_token);
+      await checkAuth(); // Recargar datos del usuario
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.message || 'Error al iniciar sesión' 
+      };
+    }
+  };
+
+  const register = async (userData) => {
+    try {
+      // Usamos la nueva función exportada
+      await registerUser(userData);
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error.message || 'Error al registrar usuario' 
+      };
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    setUser(null);
+  };
+
+  const updateUser = (newData) => {
+    setUser(prev => ({ ...prev, ...newData }));
+  };
+
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    logout,
+    updateUser,
+    isAuthenticated: !!user
+  };
+
+  return (
+    <AuthContext.Provider value={value}>
+      {!loading && children}
+    </AuthContext.Provider>
+  );
 };

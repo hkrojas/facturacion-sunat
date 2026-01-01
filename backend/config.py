@@ -1,5 +1,5 @@
 import os
-from pydantic_settings import BaseSettings # Asegúrate de tener pydantic-settings instalado
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Base de Datos
@@ -10,14 +10,14 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
-    # Facturación y APIs Externas (SUNAT / Consultas RUC)
-    # Valor por defecto: URL de ApisPeru o similar
-    API_URL: str = os.getenv("API_URL", "https://api.apis.net.pe/v2/sunat") 
-    API_TOKEN: str = os.getenv("API_TOKEN", "") # Token global por defecto (opcional)
+    # Facturación y APIs Externas (APIsPERU)
+    # URL de Producción para Facturación
+    API_URL: str = os.getenv("API_URL", "https://facturacion.apisperu.com/api/v1") 
+    # Token global por defecto (opcional, se prefiere el del usuario)
+    API_TOKEN: str = os.getenv("API_TOKEN", "") 
 
     class Config:
         env_file = ".env"
-        # Esto permite que lea variables de entorno del sistema si no hay .env
         extra = "ignore" 
 
 settings = Settings()

@@ -119,7 +119,6 @@ def get_cotizacion(db: Session, cotizacion_id: int):
         .filter(models.Cotizacion.id == cotizacion_id).first()
 
 def create_cotizacion(db: Session, cotizacion: schemas.CotizacionCreate, usuario_id: int):
-    # 1. Procesar Items
     items_db = []
     items_procesados_para_suma = []
 
@@ -144,26 +143,19 @@ def create_cotizacion(db: Session, cotizacion: schemas.CotizacionCreate, usuario
         items_db.append(db_item)
         items_procesados_para_suma.append(calculo)
 
-    # 2. Calcular Totales
     totales = calculations.sumarizar_cotizacion(items_procesados_para_suma)
 
-    # 3. Generar Correlativo Manualmente si es necesario
-    # Buscamos el último correlativo para la serie COT y sumamos 1
     ultimo_correlativo = db.query(func.max(models.Cotizacion.correlativo)).scalar() or 0
     nuevo_correlativo = ultimo_correlativo + 1
 
-    # 4. Crear Cotización
     db_cotizacion = models.Cotizacion(
         cliente_id=cotizacion.cliente_id,
         usuario_id=usuario_id,
         fecha_vencimiento=cotizacion.fecha_vencimiento,
         moneda=cotizacion.moneda,
         tipo_comprobante=cotizacion.tipo_comprobante,
-        
-        # Asignar correlativo explícito
         correlativo=nuevo_correlativo, 
-        serie="COT", # Serie por defecto
-
+        serie="COT", 
         total_gravada=totales["total_gravada"],
         total_exonerada=totales["total_exonerada"],
         total_inafecta=totales["total_inafecta"],
@@ -176,31 +168,28 @@ def create_cotizacion(db: Session, cotizacion: schemas.CotizacionCreate, usuario
     db.commit()
     db.refresh(db_cotizacion)
     
-    # IMPORTANTE: A veces refresh no carga las relaciones inmediatamente
-    # Hacemos una recarga completa para asegurar que cliente/usuario no sean null en la respuesta
     return get_cotizacion(db, db_cotizacion.id)
 
-def update_cotizacion_status(db: Session, cotizacion_id: int, estado: str, error: str = None):
-    db_cot = db.query(models.Cotizacion).filter(models.Cotizacion.id == cotizacion_id).first()
-    if db_cot:
-        db_cot.estado = estado
-        if error:
-            db_cot.sunat_error = error
-        db.commit()
-        db.refresh(db_cot)
-    return db_cot
-
 def guardar_respuesta_sunat(db: Session, cotizacion_id: int, data_sunat: dict):
+    """Guarda los links devueltos por la API de Facturación en la cotización"""
     db_cot = db.query(models.Cotizacion).filter(models.Cotizacion.id == cotizacion_id).first()
     if db_cot:
-        if 'links' in data_sunat:
-            links = data_sunat.get('links', {})
+        links = data_sunat.get('links', {}) if data_sunat.get('links') else data_sunat.get('sunat_response', {}).get('links', {})
+        if links:
             db_cot.sunat_xml_url = links.get('xml')
             db_cot.sunat_pdf_url = links.get('pdf')
             db_cot.sunat_cdr_url = links.get('cdr')
         
         db_cot.estado = "facturada"
         db_cot.sunat_error = None
+        
+        # Guardar Serie y Correlativo si la API los asignó o modificó
+        if data_sunat.get('serie'): db_cot.serie = data_sunat.get('serie')
+        if data_sunat.get('correlativo'): 
+            try:
+                db_cot.correlativo = int(data_sunat.get('correlativo'))
+            except: pass
+
         db.commit()
         db.refresh(db_cot)
     return db_cot

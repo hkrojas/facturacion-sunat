@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -50,11 +50,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     user = security.get_current_user(db, token)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales inválidas",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
     return user
 
 @app.post("/token", response_model=schemas.Token)
@@ -75,13 +71,9 @@ async def read_users_me(current_user: models.User = Depends(get_current_user)):
 
 @app.put("/users/profile", response_model=schemas.UserResponse)
 async def update_user_profile(data: schemas.UserUpdateProfile, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Actualiza el perfil del usuario con todos los campos de branding y API."""
-    # Usamos model_dump para Pydantic v2 (o .dict() para v1)
     update_data = data.model_dump(exclude_unset=True)
-    
     for key, value in update_data.items():
         setattr(current_user, key, value)
-    
     try:
         db.commit()
         db.refresh(current_user)
@@ -108,10 +100,8 @@ def consultar_documento_sunat(numero: str, db: Session = Depends(get_db), curren
     tipo = "dni" if len(numero) == 8 else "ruc" if len(numero) == 11 else None
     if not tipo: raise HTTPException(400, "Longitud inválida")
     
-    # Prioridad al token del usuario guardado en perfil
     token = current_user.apisperu_token if current_user.apisperu_token else MASTER_APISPERU_TOKEN
     url = f"{BASE_URL_APISPERU}/{tipo}/{numero}?token={token}"
-    
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -128,14 +118,14 @@ def consultar_documento_sunat(numero: str, db: Session = Depends(get_db), curren
         raise HTTPException(response.status_code, "Error API externa")
     except Exception as e: raise HTTPException(500, str(e))
 
-# --- Resto de Endpoints ---
+# --- CRUD Básico ---
 @app.get("/clientes/", response_model=List[schemas.ClienteResponse])
 def read_clientes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.get_clientes(db, skip=skip, limit=limit)
+    return crud.get_clientes(db, skip, limit)
 
 @app.post("/clientes/", response_model=schemas.ClienteResponse)
 def create_cliente(cliente: schemas.ClienteCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.create_cliente(db=db, cliente=cliente)
+    return crud.create_cliente(db, cliente)
 
 @app.put("/clientes/{cliente_id}", response_model=schemas.ClienteResponse)
 def update_cliente(cliente_id: int, cliente: schemas.ClienteCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -151,11 +141,11 @@ def delete_cliente(cliente_id: int, db: Session = Depends(get_db), current_user:
 
 @app.get("/productos/", response_model=List[schemas.ProductoResponse])
 def read_productos(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.get_productos(db, skip=skip, limit=limit)
+    return crud.get_productos(db, skip, limit)
 
 @app.post("/productos/", response_model=schemas.ProductoResponse)
 def create_producto(producto: schemas.ProductoCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.create_producto(db=db, producto=producto)
+    return crud.create_producto(db, producto)
 
 @app.put("/productos/{producto_id}", response_model=schemas.ProductoResponse)
 def update_producto(producto_id: int, producto: schemas.ProductoCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -171,11 +161,11 @@ def delete_producto(producto_id: int, db: Session = Depends(get_db), current_use
 
 @app.get("/cotizaciones/", response_model=List[schemas.CotizacionResponse])
 def read_cotizaciones(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.get_cotizaciones(db, skip=skip, limit=limit)
+    return crud.get_cotizaciones(db, skip, limit)
 
 @app.post("/cotizaciones/", response_model=schemas.CotizacionResponse)
 def create_cotizacion(cotizacion: schemas.CotizacionCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    return crud.create_cotizacion(db=db, cotizacion=cotizacion, usuario_id=current_user.id)
+    return crud.create_cotizacion(db, cotizacion, current_user.id)
 
 @app.get("/cotizaciones/{cotizacion_id}", response_model=schemas.CotizacionResponse)
 def read_cotizacion(cotizacion_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -184,7 +174,7 @@ def read_cotizacion(cotizacion_id: int, db: Session = Depends(get_db), current_u
     return res
 
 @app.get("/cotizaciones/{cotizacion_id}/pdf")
-def descargar_pdf(cotizacion_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def descargar_pdf_interno(cotizacion_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     cotizacion = crud.get_cotizacion(db, cotizacion_id)
     if not cotizacion: raise HTTPException(404)
     try:
@@ -194,3 +184,82 @@ def descargar_pdf(cotizacion_id: int, db: Session = Depends(get_db), current_use
     except Exception as e:
         print(f"Error PDF: {e}")
         raise HTTPException(500)
+
+# ==========================================
+# ENDPOINTS DE FACTURACIÓN (NUEVOS)
+# ==========================================
+
+@app.post("/cotizaciones/{cotizacion_id}/facturar")
+def emitir_comprobante(cotizacion_id: int, payload: schemas.FacturarPayload, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Emitir Factura (01) o Boleta (03) a partir de una cotización."""
+    cotizacion = crud.get_cotizacion(db, cotizacion_id)
+    if not cotizacion: raise HTTPException(404, "Documento no encontrado")
+    if not cotizacion.cliente: raise HTTPException(400, "Cliente no asignado")
+
+    try:
+        resultado = facturacion_service.emitir_factura(cotizacion, db, current_user, tipo_doc_override=payload.tipo_comprobante)
+        crud.guardar_respuesta_sunat(db, cotizacion_id, resultado)
+        return resultado
+    except facturacion_service.FacturacionException as fe:
+        raise HTTPException(400, str(fe))
+    except Exception as e:
+        print(f"Error critico: {e}")
+        raise HTTPException(500, "Error en el servicio de facturación")
+
+@app.post("/notas/emitir")
+def emitir_nota(nota_data: schemas.NotaCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Emitir Nota de Crédito/Débito."""
+    doc_afectado = crud.get_cotizacion(db, nota_data.comprobante_afectado_id)
+    if not doc_afectado: raise HTTPException(404, "Comprobante afectado no encontrado")
+    
+    # Se recomienda crear primero una 'cotización' que represente la nota para tener los items en BD
+    # Aquí asumimos que se pasa esa 'cotizacion' clonada o nueva como referencia si existiera, 
+    # pero para simplificar usamos el mismo documento afectado como base de datos, 
+    # en un caso real deberías crear un nuevo registro 'Nota' en BD antes de enviarlo.
+    # Por ahora, usamos el documento afectado como 'origen de datos' para la prueba.
+    
+    try:
+        resultado = facturacion_service.emitir_nota(
+            nota=doc_afectado, # En prod: Debería ser la nueva entidad Nota
+            doc_afectado=doc_afectado,
+            user=current_user,
+            cod_motivo=nota_data.cod_motivo,
+            descripcion=nota_data.descripcion_motivo,
+            tipo_nota=nota_data.tipo_nota
+        )
+        return resultado
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/bajas/anular")
+def anular_documento(data: schemas.AnulacionCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Dar de baja (Facturas) o Resumen Diario (Boletas) para anulación."""
+    comprobante = crud.get_cotizacion(db, data.comprobante_id)
+    if not comprobante: raise HTTPException(404)
+    
+    try:
+        res = facturacion_service.anular_comprobante(comprobante, data.motivo, current_user)
+        return res
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/facturacion/{tipo_archivo}")
+def recuperar_archivo_api(tipo_archivo: str, payload: schemas.DescargaArchivoPayload, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Recuperar XML, PDF o CDR directamente desde la API."""
+    if tipo_archivo not in ["xml", "pdf", "cdr"]: raise HTTPException(400, "Tipo inválido")
+    
+    comprobante = crud.get_cotizacion(db, payload.comprobante_id)
+    if not comprobante: raise HTTPException(404)
+    
+    try:
+        contenido = facturacion_service.descargar_archivo(tipo_archivo, comprobante, current_user)
+        
+        media_type = "application/pdf" if tipo_archivo == "pdf" else "application/xml"
+        if tipo_archivo == "cdr": media_type = "application/zip"
+        
+        ext = tipo_archivo if tipo_archivo != "cdr" else "zip"
+        filename = f"{comprobante.serie}-{comprobante.correlativo}.{ext}"
+        
+        return Response(content=contenido, media_type=media_type, headers={"Content-Disposition": f"attachment; filename={filename}"})
+    except Exception as e:
+        raise HTTPException(400, str(e))

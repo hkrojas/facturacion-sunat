@@ -1,135 +1,131 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Search, Trash2, Edit, Package, Tag } from 'lucide-react';
-import toast from 'react-hot-toast';
-
 import DashboardLayout from '../components/DashboardLayout';
+import { Plus, Search, Pencil, Trash2, Package } from 'lucide-react';
 import Button from '../components/Button';
-import Input from '../components/Input';
-import LoadingSpinner from '../components/LoadingSpinner';
 import ProductoModal from '../components/ProductoModal';
-import { productoService } from '../utils/apiUtils';
+import { getProductos, deleteProducto } from '../utils/apiUtils';
+import { useToast } from '../context/ToastContext';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 const ProductosPage = () => {
   const [productos, setProductos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
+  const [filter, setFilter] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [productoEditing, setProductoEditing] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
+  
+  const { showToast } = useToast();
 
-  useEffect(() => {
-    cargarProductos();
-  }, []);
-
-  const cargarProductos = async () => {
+  const fetchData = async () => {
     try {
-      const data = await productoService.getAll();
+      const data = await getProductos();
       setProductos(data);
     } catch (error) {
-      toast.error("Error al cargar productos");
+      showToast('Error al cargar productos', 'error');
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    fetchData();
+  }, []);
+
   const handleDelete = async (id) => {
-    if (!window.confirm("¿Eliminar este producto?")) return;
-    try {
-      await productoService.delete(id);
-      toast.success("Producto eliminado");
-      cargarProductos();
-    } catch (error) {
-      toast.error("No se pudo eliminar");
+    if (window.confirm('¿Eliminar este producto?')) {
+      try {
+        await deleteProducto(id);
+        showToast('Producto eliminado', 'success');
+        fetchData();
+      } catch (error) {
+        showToast('Error al eliminar', 'error');
+      }
     }
   };
 
-  const handleOpenCreate = () => {
-    setProductoEditing(null);
+  const openEdit = (prod) => {
+    setEditingProduct(prod);
     setIsModalOpen(true);
   };
 
-  const filteredData = productos.filter(p => 
-    p.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.codigo_interno?.toLowerCase().includes(searchTerm.toLowerCase())
+  const openNew = () => {
+    setEditingProduct(null);
+    setIsModalOpen(true);
+  };
+
+  const filtered = productos.filter(p => 
+    p.nombre.toLowerCase().includes(filter.toLowerCase()) ||
+    (p.codigo_interno && p.codigo_interno.toLowerCase().includes(filter.toLowerCase()))
   );
 
   return (
-    <DashboardLayout 
-      title="Inventario de Productos" 
-      action={
-        <Button icon={Plus} onClick={handleOpenCreate}>
-          Nuevo Producto
-        </Button>
-      }
-    >
-      <div className="card p-4 mb-6">
-        <Input 
-          placeholder="Buscar por nombre o código..." 
-          icon={Search}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          containerClassName="max-w-md mb-0"
-        />
-      </div>
+    <DashboardLayout title="Inventario de Productos">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
+          <div className="relative w-full sm:w-96">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 h-5 w-5" />
+            <input
+              type="text"
+              placeholder="Buscar producto..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </div>
+          <Button onClick={openNew} icon={Plus}>
+            Nuevo Producto
+          </Button>
+        </div>
 
-      <div className="card overflow-hidden">
         {loading ? (
-          <div className="p-12 flex justify-center">
-            <LoadingSpinner className="w-8 h-8 text-primary-600" />
-          </div>
-        ) : filteredData.length === 0 ? (
-          <div className="p-12 text-center text-surface-500">
-            <Package className="w-12 h-12 mx-auto mb-3 opacity-20" />
-            <p>No tienes productos registrados.</p>
-          </div>
+          <div className="flex justify-center py-12"><LoadingSpinner /></div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-surface-50 dark:bg-surface-900 border-b border-surface-200 dark:border-surface-700">
-                <tr>
-                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Producto</th>
-                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Código</th>
-                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300">Unidad</th>
-                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300 text-right">Precio (Inc. IGV)</th>
-                  <th className="px-6 py-4 font-semibold text-surface-700 dark:text-surface-300 text-right">Acciones</th>
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-gray-100 text-gray-500 text-sm">
+                  <th className="py-4 px-4 font-medium">Producto</th>
+                  <th className="py-4 px-4 font-medium">Código</th>
+                  <th className="py-4 px-4 font-medium text-right">Precio Unit.</th>
+                  <th className="py-4 px-4 font-medium text-right">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-surface-100 dark:divide-surface-700">
-                {filteredData.map((prod) => (
-                  <tr key={prod.id} className="hover:bg-surface-50 dark:hover:bg-surface-800/50">
-                    <td className="px-6 py-4">
+              <tbody>
+                {filtered.map((prod) => (
+                  <tr key={prod.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                    <td className="py-4 px-4">
                       <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600">
-                          <Package className="w-4 h-4"/>
+                        <div className="p-2 bg-purple-50 rounded-lg text-purple-600">
+                          <Package size={20} />
                         </div>
-                        <div>
-                          <p className="font-medium text-surface-900 dark:text-white">{prod.nombre}</p>
-                          <p className="text-xs text-surface-500 truncate max-w-[200px]">{prod.descripcion || '-'}</p>
-                        </div>
+                        <span className="font-medium text-gray-900">{prod.nombre}</span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-surface-600 font-mono text-xs">
-                      {prod.codigo_interno || 'S/C'}
+                    <td className="py-4 px-4 text-gray-600 font-mono text-sm">
+                      {prod.codigo_interno || '-'}
                     </td>
-                    <td className="px-6 py-4">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-surface-100 text-surface-800">
-                        {prod.unidad_medida}
-                      </span>
+                    <td className="py-4 px-4 text-right font-medium text-gray-900">
+                      S/ {prod.precio_unitario.toFixed(2)}
                     </td>
-                    <td className="px-6 py-4 text-right font-medium text-surface-900 dark:text-white">
-                      S/ {Number(prod.precio_unitario).toFixed(2)}
-                    </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="py-4 px-4 text-right">
                       <div className="flex justify-end gap-2">
-                        <button onClick={() => { setProductoEditing(prod); setIsModalOpen(true); }} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md">
-                          <Edit className="w-4 h-4" />
+                        <button onClick={() => openEdit(prod)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
+                          <Pencil size={16} />
                         </button>
-                        <button onClick={() => handleDelete(prod.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-md">
-                          <Trash2 className="w-4 h-4" />
+                        <button onClick={() => handleDelete(prod.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     </td>
                   </tr>
                 ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="py-12 text-center text-gray-400">
+                      No se encontraron productos
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -139,8 +135,8 @@ const ProductosPage = () => {
       <ProductoModal 
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        onSuccess={cargarProductos}
-        productoToEdit={productoEditing}
+        productoToEdit={editingProduct}
+        onSuccess={fetchData}
       />
     </DashboardLayout>
   );

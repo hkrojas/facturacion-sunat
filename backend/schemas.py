@@ -17,18 +17,15 @@ class UserCreate(UserBase):
     password: str
 
 class UserUpdateProfile(BaseModel):
-    """Esquema para actualizar todos los campos de configuración."""
     nombre_completo: Optional[str] = None
     business_name: Optional[str] = None
     business_ruc: Optional[str] = None
     business_address: Optional[str] = None
     business_phone: Optional[str] = None
-    # Branding y PDF
     primary_color: Optional[str] = None
     pdf_note_1: Optional[str] = None
     pdf_note_1_color: Optional[str] = None
     bank_accounts: Optional[List[dict]] = None 
-    # Configuración de API Facturación
     apisperu_token: Optional[str] = None
     apisperu_url: Optional[str] = None
 
@@ -97,7 +94,7 @@ class ProductoResponse(ProductoBase):
     model_config = ConfigDict(from_attributes=True)
 
 # ==========================================
-# COTIZACIONES
+# COTIZACIONES Y COMPROBANTES
 # ==========================================
 
 class CotizacionItemCreate(BaseModel):
@@ -134,8 +131,30 @@ class CotizacionResponse(BaseModel):
     total_gravada: Decimal
     total_igv: Decimal
     total_venta: Decimal
+    
+    # Datos SUNAT
+    tipo_comprobante: str
     sunat_xml_url: Optional[str] = None
     sunat_pdf_url: Optional[str] = None
+    sunat_cdr_url: Optional[str] = None
     sunat_error: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# --- NUEVOS ESQUEMAS PARA FACTURACIÓN ---
+
+class FacturarPayload(BaseModel):
+    tipo_comprobante: str # '01' Factura, '03' Boleta
+
+class NotaCreate(BaseModel):
+    comprobante_afectado_id: int
+    tipo_nota: str # 'credito' o 'debito'
+    cod_motivo: str # Ej: '01', '07'
+    descripcion_motivo: str
+
+class AnulacionCreate(BaseModel):
+    comprobante_id: int
+    motivo: str
+
+class DescargaArchivoPayload(BaseModel):
+    comprobante_id: int

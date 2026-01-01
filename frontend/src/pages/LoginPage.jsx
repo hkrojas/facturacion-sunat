@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form'; // npm install react-hook-form
-import toast from 'react-hot-toast';
-import { Lock, Mail, ArrowRight } from 'lucide-react'; // npm install lucide-react
+import { useNavigate, Link } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
 
 import AuthLayout from '../components/AuthLayout';
 import Input from '../components/Input';
-import Button from '../components/Button';
-import { useAuth } from '../context/AuthContext'; // Asumimos que existe o lo crearemos
-import { authService } from '../utils/apiUtils';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
+/**
+ * LoginPage: Diseño refinado y centrado.
+ */
 const LoginPage = () => {
   const navigate = useNavigate();
-  const { login } = useAuth(); // Función del contexto para guardar estado global
+  const { login } = useAuth();
+  const { showToast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
 
   const { register, handleSubmit, formState: { errors } } = useForm();
@@ -20,20 +22,16 @@ const LoginPage = () => {
   const onSubmit = async (data) => {
     setIsLoading(true);
     try {
-      // 1. Llamada a la API
-      const response = await authService.login(data.email, data.password);
+      const result = await login({ username: data.email, password: data.password });
       
-      // 2. Guardar sesión (Contexto + LocalStorage)
-      login(response.access_token); 
-      
-      // 3. Feedback y Redirección
-      toast.success('¡Bienvenido de nuevo!');
-      
-      // Pequeño delay para suavizar la transición
-      setTimeout(() => navigate('/dashboard'), 500);
-
+      if (result.success) {
+        showToast('Acceso autorizado. Cargando panel...', 'success');
+        setTimeout(() => navigate('/'), 500);
+      } else {
+        throw new Error(result.error || 'Credenciales de acceso incorrectas.');
+      }
     } catch (error) {
-      toast.error(error.message || 'Error al iniciar sesión');
+      showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -41,62 +39,82 @@ const LoginPage = () => {
 
   return (
     <AuthLayout 
-      title="Iniciar Sesión" 
-      subtitle="Ingresa tus credenciales para acceder al panel."
+      title="Acceso al Panel" 
+      subtitle="Ingresa tus credenciales de FacturaPro para continuar."
+      footerLink={
+        <p className="text-sm text-slate-500 font-medium">
+          ¿Nuevo en la plataforma?{' '}
+          <Link to="/register" className="text-indigo-600 font-bold hover:text-indigo-500 transition-colors decoration-2 underline-offset-4 hover:underline">
+            Crea tu cuenta gratis
+          </Link>
+        </p>
+      }
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         
+        {/* Email Corporativo */}
         <Input
-          label="Correo Electrónico"
+          label="Email Corporativo"
           type="email"
-          placeholder="admin@empresa.com"
+          placeholder="ejemplo@empresa.com"
           icon={Mail}
           error={errors.email?.message}
           {...register("email", { 
-            required: "El correo es obligatorio",
+            required: "El email es obligatorio",
             pattern: {
               value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-              message: "Correo electrónico inválido"
+              message: "Formato de email no válido"
             }
           })}
         />
 
+        {/* Contraseña */}
         <div className="space-y-1">
+          <div className="flex justify-between items-center px-1 mb-0">
+            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+              Contraseña
+            </label>
+            <button 
+              type="button" 
+              className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700 transition-colors"
+            >
+              Recuperar acceso
+            </button>
+          </div>
           <Input
-            label="Contraseña"
             type="password"
-            placeholder="••••••••"
+            placeholder="••••••••••••"
             icon={Lock}
             error={errors.password?.message}
             {...register("password", { required: "La contraseña es obligatoria" })}
           />
-          <div className="flex justify-end">
-            <a href="#" className="text-sm font-medium text-primary-600 hover:text-primary-500 transition-colors">
-              ¿Olvidaste tu contraseña?
-            </a>
-          </div>
         </div>
 
-        <Button 
-          type="submit" 
-          className="w-full" 
-          isLoading={isLoading}
-          icon={ArrowRight}
-        >
-          Ingresar al Sistema
-        </Button>
-
-      </form>
-
-      <div className="mt-6 text-center text-sm text-surface-500">
-        ¿No tienes una cuenta?{' '}
+        {/* Botón de Acción Principal */}
         <button 
-          onClick={() => navigate('/register')}
-          className="font-semibold text-primary-600 hover:text-primary-500 transition-colors"
+          type="submit" 
+          disabled={isLoading}
+          className={`
+            group relative w-full py-4 px-6 rounded-2xl flex items-center justify-center gap-3 text-sm font-bold text-white overflow-hidden
+            transition-all duration-300 transform
+            ${isLoading 
+              ? 'bg-indigo-400 cursor-not-allowed shadow-none' 
+              : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] shadow-lg shadow-indigo-600/20 hover:shadow-indigo-600/30'}
+          `}
         >
-          Regístrate aquí
+          {isLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <>
+              Ingresar al Panel <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+            </>
+          )}
         </button>
-      </div>
+
+        <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-widest opacity-60">
+          Infraestructura de Facturación Segura SSL
+        </p>
+      </form>
     </AuthLayout>
   );
 };

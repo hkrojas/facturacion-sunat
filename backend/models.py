@@ -1,97 +1,51 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Text, Numeric, Enum, JSON
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Text, Boolean, JSON
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-import enum
 from database import Base
-
-# ==========================================
-# ENUMS (Catálogos SUNAT)
-# ==========================================
-
-class TipoDocumentoEnum(str, enum.Enum):
-    """Catálogo 06 SUNAT"""
-    DNI = "1"
-    RUC = "6"
-    CARNET_EXTRANJERIA = "4"
-    PASAPORTE = "7"
-    SIN_DOCUMENTO = "0"
-
-class TipoComprobanteEnum(str, enum.Enum):
-    """Catálogo 01 SUNAT"""
-    FACTURA = "01"
-    BOLETA = "03"
-    NOTA_CREDITO = "07"
-    NOTA_DEBITO = "08"
-    COTIZACION = "00" # Interno
-
-class UnidadMedidaEnum(str, enum.Enum):
-    """Catálogo 03 SUNAT (Comunes)"""
-    UNIDAD = "NIU"
-    KILOGRAMO = "KGM"
-    LITRO = "LTR"
-    CAJA = "BX"
-    SERVICIO = "ZZ"
-
-class TipoAfectacionEnum(str, enum.Enum):
-    """Catálogo 07 SUNAT (Resumido)"""
-    GRAVADO_ONEROSA = "10"
-    EXONERADO_ONEROSA = "20"
-    INAFECTO_ONEROSA = "30"
-    EXPORTACION = "40"
-
-# ==========================================
-# TABLAS DEL SISTEMA
-# ==========================================
+from datetime import datetime
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
     nombre_completo = Column(String)
     rol = Column(String, default="vendedor")
     
-    # --- DATOS DE LA EMPRESA (PERSONALIZACIÓN) ---
-    business_name = Column(String, nullable=True)      # Razón Social
-    business_ruc = Column(String, nullable=True)       # RUC Emisor
-    business_address = Column(String, nullable=True)   # Dirección Fiscal
-    business_phone = Column(String, nullable=True)     # Teléfono Contacto
+    # Perfil de Empresa (Emisor)
+    business_name = Column(String, nullable=True)
+    business_ruc = Column(String, nullable=True)
+    business_address = Column(String, nullable=True)
+    business_phone = Column(String, nullable=True)
+    logo_filename = Column(String, nullable=True)
     
-    # --- BRANDING ---
-    primary_color = Column(String, default="#004aad")  # Color hexadecimal
-    logo_filename = Column(String, nullable=True)      # Nombre archivo logo (ej: logo_1.png)
+    # Configuración Visual PDF
+    primary_color = Column(String, default="#2563EB") # Azul por defecto
+    pdf_note_1 = Column(Text, nullable=True) # Nota roja (ej: Cuentas)
+    pdf_note_1_color = Column(String, default="#FF0000")
+    pdf_note_2 = Column(Text, nullable=True) # Nota negra pie de página
     
-    # --- CONFIGURACIÓN PDF ---
-    pdf_note_1 = Column(Text, default="Precios incluyen IGV. Validez: 15 días.") # Términos
-    pdf_note_1_color = Column(String, default="#FF0000") # Color de la nota importante
-    bank_accounts = Column(JSON, nullable=True)        # Lista de cuentas bancarias [{"banco": "BCP", "cuenta": "..."}]
-    
-    # Configuración de Facturación
-    apisperu_token = Column(String, nullable=True) 
-    apisperu_url = Column(String, nullable=True)
-    
+    # Datos Bancarios (JSON)
+    # Estructura: [{"banco": "BCP", "moneda": "Soles", "cuenta": "...", "cci": "..."}]
+    bank_accounts = Column(JSON, nullable=True)
+
+    # Configuración Facturación (ApisPeru)
+    apisperu_token = Column(String, nullable=True)
+    apisperu_url = Column(String, nullable=True) # Opcional si usas uno privado
+
     cotizaciones = relationship("Cotizacion", back_populates="usuario")
 
 class Cliente(Base):
     __tablename__ = "clientes"
 
     id = Column(Integer, primary_key=True, index=True)
-    
-    # Datos SUNAT
-    tipo_documento = Column(String(2), default=TipoDocumentoEnum.DNI, nullable=False)
-    numero_documento = Column(String(15), unique=True, index=True, nullable=False)
-    razon_social = Column(String(200), nullable=False)
-    nombre_comercial = Column(String(200), nullable=True)
-    
-    # Ubicación
-    direccion = Column(String(255), nullable=True)
-    ubigeo = Column(String(6), nullable=True)
-    codigo_pais = Column(String(2), default="PE")
-    
-    # Contacto
-    email = Column(String(100), nullable=True)
-    telefono = Column(String(20), nullable=True)
+    tipo_documento = Column(String, default="1") # 1: DNI, 6: RUC
+    numero_documento = Column(String, index=True)
+    razon_social = Column(String)
+    nombre_comercial = Column(String, nullable=True)
+    direccion = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    telefono = Column(String, nullable=True)
     
     cotizaciones = relationship("Cotizacion", back_populates="cliente")
 
@@ -99,82 +53,71 @@ class Producto(Base):
     __tablename__ = "productos"
 
     id = Column(Integer, primary_key=True, index=True)
-    codigo_interno = Column(String(50), unique=True, index=True)
-    nombre = Column(String(200), nullable=False)
+    codigo_interno = Column(String, nullable=True)
+    nombre = Column(String, index=True)
     descripcion = Column(Text, nullable=True)
-    
-    # Precios y SUNAT
-    precio_unitario = Column(Numeric(12, 2), nullable=False) # Precio FINAL (con IGV)
-    valor_unitario = Column(Numeric(12, 2), nullable=False)  # Precio BASE (sin IGV)
-    
-    unidad_medida = Column(String(3), default=UnidadMedidaEnum.UNIDAD)
-    tipo_afectacion_igv = Column(String(2), default=TipoAfectacionEnum.GRAVADO_ONEROSA)
-    codigo_sunat = Column(String(8), nullable=True)
-
-    cotizaciones_items = relationship("CotizacionItem", back_populates="producto")
+    precio_unitario = Column(Float) # Precio FINAL (con IGV)
+    valor_unitario = Column(Float)  # Valor BASE (sin IGV) - Calculado
+    unidad_medida = Column(String, default="NIU") # NIU = Unidad
+    tipo_afectacion_igv = Column(String, default="10") # 10 = Gravado
 
 class Cotizacion(Base):
     __tablename__ = "cotizaciones"
 
     id = Column(Integer, primary_key=True, index=True)
-    serie = Column(String(4), default="COT") 
-    correlativo = Column(Integer, autoincrement=True)
+    serie = Column(String, default="COT") 
+    correlativo = Column(Integer)
+    fecha_emision = Column(DateTime, default=datetime.now)
+    fecha_vencimiento = Column(DateTime, nullable=True)
+    moneda = Column(String, default="PEN") # PEN o USD
+    estado = Column(String, default="pendiente") # pendiente, facturada, anulada
     
     # Relaciones
-    cliente_id = Column(Integer, ForeignKey("clientes.id"), nullable=False)
-    usuario_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
-    # Fechas
-    fecha_emision = Column(DateTime(timezone=True), server_default=func.now())
-    fecha_vencimiento = Column(DateTime(timezone=True), nullable=True)
-    
-    # Estado
-    estado = Column(String(20), default="pendiente")
-    
-    # Datos para Facturación
-    tipo_comprobante = Column(String(2), default=TipoComprobanteEnum.COTIZACION)
-    moneda = Column(String(3), default="PEN")
-    
-    # Totales
-    total_gravada = Column(Numeric(12, 2), default=0.00)
-    total_exonerada = Column(Numeric(12, 2), default=0.00)
-    total_inafecta = Column(Numeric(12, 2), default=0.00)
-    total_igv = Column(Numeric(12, 2), default=0.00)
-    total_venta = Column(Numeric(12, 2), default=0.00)
-
-    # Datos de respuesta SUNAT
-    sunat_xml_url = Column(String, nullable=True)
-    sunat_pdf_url = Column(String, nullable=True)
-    sunat_cdr_url = Column(String, nullable=True)
-    sunat_error = Column(Text, nullable=True)
-    
+    cliente_id = Column(Integer, ForeignKey("clientes.id"))
     cliente = relationship("Cliente", back_populates="cotizaciones")
+    
+    usuario_id = Column(Integer, ForeignKey("users.id"))
     usuario = relationship("User", back_populates="cotizaciones")
+    
     items = relationship("CotizacionItem", back_populates="cotizacion", cascade="all, delete-orphan")
+
+    # Totales Globales
+    total_gravada = Column(Float, default=0.0)
+    total_exonerada = Column(Float, default=0.0)
+    total_inafecta = Column(Float, default=0.0)
+    total_igv = Column(Float, default=0.0)
+    total_venta = Column(Float, default=0.0)
+
+    # --- CAMPOS NUEVOS PARA FACTURACIÓN ELECTRÓNICA ---
+    tipo_comprobante = Column(String, default="00") # 00: Cotización, 01: Factura, 03: Boleta
+    
+    # Enlaces devueltos por la API (ApisPeru)
+    sunat_xml_url = Column(String, nullable=True)
+    sunat_pdf_url = Column(String, nullable=True) # PDF generado por SUNAT (opcional, usamos el nuestro)
+    sunat_cdr_url = Column(String, nullable=True) # Constancia de Recepción
+    
+    # Control de errores
+    sunat_error = Column(Text, nullable=True) # Si SUNAT rechaza
 
 class CotizacionItem(Base):
     __tablename__ = "cotizacion_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    cotizacion_id = Column(Integer, ForeignKey("cotizaciones.id"), nullable=False)
+    cotizacion_id = Column(Integer, ForeignKey("cotizaciones.id"))
     producto_id = Column(Integer, ForeignKey("productos.id"), nullable=True)
     
-    # Snapshot del producto
-    descripcion = Column(String(200), nullable=False)
-    cantidad = Column(Numeric(12, 2), nullable=False)
+    descripcion = Column(String)
+    cantidad = Column(Float)
     
-    # Precios Unitarios
-    precio_unitario = Column(Numeric(12, 2), nullable=False)
-    valor_unitario = Column(Numeric(12, 2), nullable=False)
+    # Montos por Ítem
+    precio_unitario = Column(Float) # Precio Unitario con IGV (del momento)
+    valor_unitario = Column(Float)  # Valor Unitario sin IGV
     
-    # Totales por Item
-    total_base_igv = Column(Numeric(12, 2), nullable=False)
-    total_igv = Column(Numeric(12, 2), nullable=False)
-    total_item = Column(Numeric(12, 2), nullable=False)
-    
-    # Datos SUNAT
-    unidad_medida = Column(String(3), default="NIU")
-    tipo_afectacion_igv = Column(String(2), default="10")
-    
+    total_base_igv = Column(Float) # Base imponible total item
+    total_igv = Column(Float)      # IGV total item
+    total_item = Column(Float)     # Precio total item (venta)
+
+    unidad_medida = Column(String, default="NIU")
+    tipo_afectacion_igv = Column(String, default="10")
+
     cotizacion = relationship("Cotizacion", back_populates="items")
-    producto = relationship("Producto", back_populates="cotizaciones_items")

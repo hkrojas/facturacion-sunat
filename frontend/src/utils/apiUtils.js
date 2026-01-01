@@ -1,95 +1,207 @@
-import { API_BASE_URL } from '../config';
+import { config } from '../config';
 
-const getHeaders = () => {
+const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
   return {
     'Content-Type': 'application/json',
-    ...(token && { Authorization: `Bearer ${token}` }),
+    'Authorization': `Bearer ${token}`
   };
 };
 
-const handleResponse = async (response) => {
-  const contentType = response.headers.get("content-type");
-  let data;
-  if (contentType && contentType.indexOf("application/json") !== -1) {
-    data = await response.json();
-  } else {
-    data = await response.text();
-  }
+// --- USUARIOS Y AUTH ---
+export const loginUser = async (credentials) => {
+  const formData = new FormData();
+  formData.append('username', credentials.username);
+  formData.append('password', credentials.password);
 
+  const response = await fetch(`${config.API_URL}/token`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!response.ok) throw new Error('Credenciales inválidas');
+  return response.json();
+};
+
+export const registerUser = async (userData) => {
+  const response = await fetch(`${config.API_URL}/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userData),
+  });
+  if (!response.ok) throw new Error('Error al registrar usuario');
+  return response.json();
+};
+
+export const getUserProfile = async () => {
+  const response = await fetch(`${config.API_URL}/users/me/`, {
+    headers: getAuthHeaders()
+  });
+  if (!response.ok) throw new Error('Error al obtener perfil');
+  return response.json();
+};
+
+export const updateUserProfile = async (data) => {
+  const response = await fetch(`${config.API_URL}/users/profile`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data)
+  });
+  if (!response.ok) throw new Error('Error al actualizar perfil');
+  return response.json();
+};
+
+// --- CLIENTES ---
+export const getClientes = async () => {
+  const response = await fetch(`${config.API_URL}/clientes/`, { headers: getAuthHeaders() });
+  if (!response.ok) throw new Error('Error al cargar clientes');
+  return response.json();
+};
+
+export const createCliente = async (cliente) => {
+  const response = await fetch(`${config.API_URL}/clientes/`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(cliente)
+  });
+  if (!response.ok) throw new Error('Error al crear cliente');
+  return response.json();
+};
+
+export const updateCliente = async (id, cliente) => {
+  const response = await fetch(`${config.API_URL}/clientes/${id}`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(cliente)
+  });
+  if (!response.ok) throw new Error('Error al actualizar cliente');
+  return response.json();
+};
+
+export const deleteCliente = async (id) => {
+  const response = await fetch(`${config.API_URL}/clientes/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  });
+  if (!response.ok) throw new Error('Error al eliminar cliente');
+  return response.json();
+};
+
+// --- PRODUCTOS ---
+export const getProductos = async () => {
+  const response = await fetch(`${config.API_URL}/productos/`, { headers: getAuthHeaders() });
+  if (!response.ok) throw new Error('Error al cargar productos');
+  return response.json();
+};
+
+export const createProducto = async (producto) => {
+  const response = await fetch(`${config.API_URL}/productos/`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(producto)
+  });
+  if (!response.ok) throw new Error('Error al crear producto');
+  return response.json();
+};
+
+export const updateProducto = async (id, producto) => {
+  const response = await fetch(`${config.API_URL}/productos/${id}`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(producto)
+  });
+  if (!response.ok) throw new Error('Error al actualizar producto');
+  return response.json();
+};
+
+export const deleteProducto = async (id) => {
+  const response = await fetch(`${config.API_URL}/productos/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders()
+  });
+  if (!response.ok) throw new Error('Error al eliminar producto');
+  return response.json();
+};
+
+// --- COTIZACIONES ---
+export const getCotizaciones = async () => {
+  const response = await fetch(`${config.API_URL}/cotizaciones/`, { headers: getAuthHeaders() });
+  if (!response.ok) throw new Error('Error al cargar cotizaciones');
+  return response.json();
+};
+
+export const createCotizacion = async (cotizacion) => {
+  const response = await fetch(`${config.API_URL}/cotizaciones/`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(cotizacion)
+  });
+  if (!response.ok) throw new Error('Error al crear cotización');
+  return response.json();
+};
+
+export const getCotizacion = async (id) => {
+  const response = await fetch(`${config.API_URL}/cotizaciones/${id}`, { headers: getAuthHeaders() });
+  if (!response.ok) throw new Error('Error al cargar cotización');
+  return response.json();
+};
+
+// --- FACTURACIÓN Y SUNAT (NUEVO) ---
+
+export const emitirComprobanteSunat = async (cotizacionId, tipoComprobante) => {
+  // tipoComprobante: '01' (Factura) o '03' (Boleta)
+  const response = await fetch(`${config.API_URL}/cotizaciones/${cotizacionId}/facturar`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ tipo_comprobante: tipoComprobante })
+  });
+  
+  const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
-      throw new Error('Sesión expirada.');
-    }
-    const errorMessage = data?.detail || data?.message || 'Error desconocido';
-    throw new Error(errorMessage);
+    throw new Error(data.detail || 'Error al emitir comprobante');
   }
   return data;
 };
 
-export const api = {
-  get: async (endpoint) => {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'GET', headers: getHeaders(),
-    });
-    return handleResponse(response);
-  },
-  post: async (endpoint, body) => {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify(body),
-    });
-    return handleResponse(response);
-  },
-  put: async (endpoint, body) => {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'PUT', headers: getHeaders(), body: JSON.stringify(body),
-    });
-    return handleResponse(response);
-  },
-  delete: async (endpoint) => {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-      method: 'DELETE', headers: getHeaders(),
-    });
-    return handleResponse(response);
-  },
+export const anularComprobante = async (comprobanteId, motivo) => {
+  const response = await fetch(`${config.API_URL}/bajas/anular`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ comprobante_id: comprobanteId, motivo })
+  });
+  
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || 'Error al anular');
+  return data;
 };
 
-export const authService = {
-  login: async (username, password) => {
-    const formData = new URLSearchParams();
-    formData.append('username', username);
-    formData.append('password', password);
-    const response = await fetch(`${API_BASE_URL}/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formData,
-    });
-    return handleResponse(response);
-  },
-  register: (data) => api.post('/register', data),
-  getMe: () => api.get('/users/me/'),
+export const descargarArchivoSunat = async (comprobanteId, tipoArchivo) => {
+  // tipoArchivo: 'xml', 'pdf', 'cdr'
+  // Nota: Para PDF interno usamos otro endpoint, este es para el PDF de SUNAT/ApisPeru
+  const response = await fetch(`${config.API_URL}/facturacion/${tipoArchivo}`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ comprobante_id: comprobanteId })
+  });
+
+  if (!response.ok) throw new Error('Error al descargar archivo');
+  return response.blob();
 };
 
-export const cotizacionService = {
-  getAll: () => api.get('/cotizaciones/'),
-  getById: (id) => api.get(`/cotizaciones/${id}`),
-  create: (data) => api.post('/cotizaciones/', data),
-  facturar: (id) => api.post(`/cotizaciones/${id}/facturar`, {}),
+// --- EXTRAS ---
+export const consultarRucDni = async (numero) => {
+  const response = await fetch(`${config.API_URL}/consultar-ruc/${numero}`, { headers: getAuthHeaders() });
+  if (!response.ok) throw new Error('No encontrado');
+  return response.json();
 };
 
-export const clienteService = {
-  getAll: () => api.get('/clientes/'),
-  create: (data) => api.post('/clientes/', data),
-  update: (id, data) => api.put(`/clientes/${id}`, data), // ✅ HABILITADO
-  delete: (id) => api.delete(`/clientes/${id}`),
-};
-
-export const productoService = {
-  getAll: () => api.get('/productos/'),
-  create: (data) => api.post('/productos/', data),
-  update: (id, data) => api.put(`/productos/${id}`, data), // ✅ HABILITADO
-  delete: (id) => api.delete(`/productos/${id}`),
+export const uploadLogo = async (file) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(`${config.API_URL}/users/upload-logo`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+    body: formData
+  });
+  if (!response.ok) throw new Error('Error al subir logo');
+  return response.json();
 };

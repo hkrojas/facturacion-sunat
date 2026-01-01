@@ -33,13 +33,15 @@ def calcular_item(cantidad: Decimal, precio_con_igv: Decimal):
 
     # 1. Valor Unitario (Base Imponible Unitaria)
     valor_unitario = precio_final / FACTOR_IGV
+    # Para precisión interna usamos más decimales antes del redondeo final
+    valor_unitario_preciso = valor_unitario 
     valor_unitario = redondear(valor_unitario)
 
-    # 2. Total Base
-    total_base = valor_unitario * qty
+    # 2. Total Base (Valor Venta)
+    total_base = valor_unitario_preciso * qty
     total_base = redondear(total_base)
 
-    # 3. Total Venta
+    # 3. Total Venta (Precio Venta)
     total_item = precio_final * qty
     total_item = redondear(total_item)
 
@@ -48,13 +50,32 @@ def calcular_item(cantidad: Decimal, precio_con_igv: Decimal):
     
     return {
         "cantidad": qty,
-        "precio_unitario": precio_final,
-        "valor_unitario": valor_unitario,
+        "precio_unitario": precio_final, # Con IGV
+        "valor_unitario": valor_unitario, # Sin IGV
         "total_base_igv": total_base,
         "total_igv": total_igv,
         "total_item": total_item,
         "unidad_medida": "NIU",
         "tipo_afectacion_igv": "10" 
+    }
+
+def sumarizar_cotizacion(items_procesados: list):
+    """Suma totales para la cabecera de la cotización."""
+    total_gravada = Decimal("0.00")
+    total_igv = Decimal("0.00")
+    total_venta = Decimal("0.00")
+
+    for item in items_procesados:
+        total_gravada += to_decimal(item["total_base_igv"])
+        total_igv += to_decimal(item["total_igv"])
+        total_venta += to_decimal(item["total_item"])
+
+    return {
+        "total_gravada": redondear(total_gravada),
+        "total_igv": redondear(total_igv),
+        "total_venta": redondear(total_venta),
+        "total_exonerada": Decimal("0.00"),
+        "total_inafecta": Decimal("0.00")
     }
 
 # --- FUNCIONES DE SOPORTE PARA PDF GENERATOR (V3) ---
@@ -78,8 +99,13 @@ def calculate_cotizacion_totals_v3(items):
     line_totals = []
 
     for item in items:
-        qty = item.get('unidades', 0)
-        price = item.get('precio_unitario', 0)
+        # Soporte para dict o objeto
+        if isinstance(item, dict):
+            qty = item.get('unidades', 0)
+            price = item.get('precio_unitario', 0)
+        else:
+            qty = getattr(item, 'cantidad', 0)
+            price = getattr(item, 'precio_unitario', 0)
         
         calc = get_line_totals_v3(qty, price)
         line_totals.append(calc)
@@ -93,23 +119,4 @@ def calculate_cotizacion_totals_v3(items):
         'total_igv_v3': total_igv,
         'monto_total_v3': monto_total,
         'line_totals': line_totals
-    }
-
-def sumarizar_cotizacion(items_procesados: list):
-    """Suma totales para la cabecera de la cotización."""
-    total_gravada = Decimal("0.00")
-    total_igv = Decimal("0.00")
-    total_venta = Decimal("0.00")
-
-    for item in items_procesados:
-        total_gravada += item["total_base_igv"]
-        total_igv += item["total_igv"]
-        total_venta += item["total_item"]
-
-    return {
-        "total_gravada": total_gravada,
-        "total_igv": total_igv,
-        "total_venta": total_venta,
-        "total_exonerada": Decimal("0.00"),
-        "total_inafecta": Decimal("0.00")
     }

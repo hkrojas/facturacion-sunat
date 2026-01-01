@@ -1,21 +1,26 @@
 import React from 'react';
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import LoadingSpinner from './LoadingSpinner';
 
-const ProtectedRoute = () => {
-  const { isAuthenticated, isLoading } = useAuth();
+const ProtectedRoute = ({ children }) => {
+  const { user, loading } = useAuth();
+  const location = useLocation();
 
-  if (isLoading) {
+  if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <LoadingSpinner className="w-10 h-10 text-indigo-600" />
+        <LoadingSpinner />
       </div>
     );
   }
 
-  // Si no está autenticado, redirigir al login
-  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
+  if (!user) {
+    // Redirigir al login pero guardando la ubicación intento
+    return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  return children;
 };
 
 export default ProtectedRoute;

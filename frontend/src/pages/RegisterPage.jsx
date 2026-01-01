@@ -1,42 +1,42 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import toast from 'react-hot-toast';
-import { User, Mail, Lock, ArrowRight, Eye, EyeOff } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { UserPlus, User, Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
 
 import AuthLayout from '../components/AuthLayout';
 import Input from '../components/Input';
-import Button from '../components/Button';
-import { authService } from '../utils/apiUtils';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 
+/**
+ * RegisterPage: Diseño cohesivo con el sistema de diseño premium.
+ */
 const RegisterPage = () => {
-  const navigate = useNavigate();
+  const { register, handleSubmit, formState: { errors }, watch } = useForm();
+  const { register: registerUser } = useAuth();
+  const { showToast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
-  
-  // Estados para ver/ocultar contraseñas
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const navigate = useNavigate();
 
-  const { register, handleSubmit, watch, formState: { errors } } = useForm();
-  
-  // Observar la contraseña original para compararla
-  const password = watch("password", "");
+  const password = watch('password');
 
   const onSubmit = async (data) => {
     setIsLoading(true);
     try {
-      await authService.register({
+      const result = await registerUser({
         email: data.email,
         password: data.password,
-        nombre_completo: data.nombre_completo,
-        rol: "vendedor"
+        nombre_completo: data.nombre_completo
       });
       
-      toast.success('Cuenta creada exitosamente');
-      setTimeout(() => navigate('/login'), 1500);
-
+      if (result.success) {
+        showToast('¡Cuenta creada! Ya puedes iniciar sesión.', 'success');
+        navigate('/login');
+      } else {
+        throw new Error(result.error || 'Hubo un error al procesar el registro.');
+      }
     } catch (error) {
-      toast.error(error.message || 'Error al registrarse');
+      showToast(error.message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -44,103 +44,95 @@ const RegisterPage = () => {
 
   return (
     <AuthLayout 
-      title="Crear Cuenta" 
-      subtitle="Únete y empieza a gestionar tu negocio hoy mismo."
+      title="Crear una Cuenta" 
+      subtitle="Únete a FacturaPro y optimiza tus procesos fiscales hoy mismo."
+      footerLink={
+        <p className="text-sm text-slate-500 font-medium">
+          ¿Ya tienes cuenta en FacturaPro?{' '}
+          <Link to="/login" className="text-indigo-600 font-bold hover:text-indigo-500 transition-colors decoration-2 underline-offset-4 hover:underline">
+            Inicia sesión aquí
+          </Link>
+        </p>
+      }
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         
+        {/* Nombre Completo */}
         <Input
-          label="Nombre Completo"
-          placeholder="Juan Pérez"
+          label="Nombre y Apellidos"
+          placeholder="Ej. Martín Vizcarra"
           icon={User}
           error={errors.nombre_completo?.message}
-          {...register("nombre_completo", { required: "El nombre es obligatorio" })}
+          {...register('nombre_completo', { required: 'El nombre es requerido' })}
         />
 
+        {/* Email Corporativo */}
         <Input
-          label="Correo Electrónico"
+          label="Email de Trabajo"
           type="email"
-          placeholder="juan@empresa.com"
+          placeholder="nombre@empresa.com"
           icon={Mail}
           error={errors.email?.message}
-          {...register("email", { 
-            required: "El correo es obligatorio",
+          {...register('email', { 
+            required: 'El correo electrónico es obligatorio',
             pattern: {
               value: /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i,
-              message: "Correo electrónico inválido"
+              message: 'Email no válido'
             }
           })}
         />
 
-        {/* Campo Contraseña */}
-        <Input
-          label="Contraseña"
-          type={showPassword ? "text" : "password"}
-          placeholder="••••••••"
-          icon={Lock}
-          error={errors.password?.message}
-          rightElement={
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="text-surface-400 hover:text-primary-500 focus:outline-none transition-colors"
-              tabIndex="-1"
-            >
-              {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-            </button>
-          }
-          {...register("password", { 
-            required: "La contraseña es obligatoria",
-            minLength: {
-              value: 6,
-              message: "Mínimo 6 caracteres"
-            }
-          })}
-        />
+        {/* Contraseñas en Grid para Registro */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Input
+            label="Contraseña"
+            type="password"
+            placeholder="••••••••"
+            icon={Lock}
+            error={errors.password?.message}
+            {...register('password', { 
+              required: 'Requerida',
+              minLength: { value: 6, message: 'Mínimo 6' }
+            })}
+          />
+          <Input
+            label="Confirmar"
+            type="password"
+            placeholder="••••••••"
+            icon={Lock}
+            error={errors.confirmPassword?.message}
+            {...register('confirmPassword', { 
+              required: 'Requerida',
+              validate: value => value === password || 'No coinciden'
+            })}
+          />
+        </div>
 
-        {/* Campo Confirmar Contraseña */}
-        <Input
-          label="Confirmar Contraseña"
-          type={showConfirmPassword ? "text" : "password"}
-          placeholder="••••••••"
-          icon={Lock}
-          error={errors.confirmPassword?.message}
-          rightElement={
-            <button
-              type="button"
-              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-              className="text-surface-400 hover:text-primary-500 focus:outline-none transition-colors"
-              tabIndex="-1"
-            >
-              {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-            </button>
-          }
-          {...register("confirmPassword", { 
-            required: "Por favor confirma tu contraseña",
-            validate: (value) => value === password || "Las contraseñas no coinciden"
-          })}
-        />
-
-        <Button 
-          type="submit" 
-          className="w-full mt-2" 
-          isLoading={isLoading}
-          icon={ArrowRight}
-        >
-          Registrarse
-        </Button>
-
-      </form>
-
-      <div className="mt-6 text-center text-sm text-surface-500">
-        ¿Ya tienes una cuenta?{' '}
+        {/* Botón de Registro */}
         <button 
-          onClick={() => navigate('/login')}
-          className="font-semibold text-primary-600 hover:text-primary-500 transition-colors"
+          type="submit" 
+          disabled={isLoading}
+          className={`
+            group relative w-full mt-4 py-4 px-6 rounded-2xl flex items-center justify-center gap-3 text-sm font-bold text-white overflow-hidden
+            transition-all duration-300 transform
+            ${isLoading 
+              ? 'bg-indigo-400 cursor-not-allowed shadow-none' 
+              : 'bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] shadow-lg shadow-indigo-600/20 hover:shadow-indigo-600/30'}
+          `}
         >
-          Inicia Sesión
+          {isLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <>
+              Empezar Ahora <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+            </>
+          )}
         </button>
-      </div>
+
+        <p className="text-[10px] text-center text-slate-400 font-medium leading-relaxed px-4">
+          Al crear una cuenta, aceptas nuestros <span className="text-slate-600 cursor-pointer hover:underline">Términos de Servicio</span> y <span className="text-slate-600 cursor-pointer hover:underline">Políticas de Privacidad</span>.
+        </p>
+      </form>
     </AuthLayout>
   );
 };

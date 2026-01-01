@@ -1,163 +1,140 @@
 import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { X, Save, Building2, User, MapPin, Mail, Phone, Search } from 'lucide-react';
-import toast from 'react-hot-toast';
-
-import Button from './Button';
+import { X, Search, Save, Loader2 } from 'lucide-react';
 import Input from './Input';
-import { clienteService, api } from '../utils/apiUtils';
+import Button from './Button';
+import { createCliente, updateCliente, consultarRucDni } from '../utils/apiUtils';
+import { useToast } from '../context/ToastContext';
 
-const ClienteModal = ({ isOpen, onClose, onSuccess, clienteToEdit = null }) => {
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm({
-    defaultValues: {
-      tipo_documento: '6', // RUC por defecto
-      numero_documento: '',
-      razon_social: '',
-      direccion: '',
-      email: '',
-      telefono: ''
-    }
-  });
+const ClienteModal = ({ isOpen, onClose, clienteToEdit, onSuccess }) => {
+  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm();
+  const [loading, setLoading] = useState(false);
+  const [consulting, setConsulting] = useState(false);
+  const { showToast } = useToast();
 
-  const tipoDoc = watch('tipo_documento');
-  const numeroDoc = watch('numero_documento');
-  const isRUC = tipoDoc === '6';
-  const isDNI = tipoDoc === '1';
-  const canSearch = isRUC || isDNI;
-  
-  const [isSearching, setIsSearching] = useState(false);
+  const tipoDoc = watch('tipo_documento', '6'); // 6=RUC por defecto
 
   useEffect(() => {
-    if (clienteToEdit) {
-      Object.keys(clienteToEdit).forEach(key => {
-        setValue(key, clienteToEdit[key]);
-      });
-      if (clienteToEdit.tipo_documento === 'RUC') setValue('tipo_documento', '6');
-      if (clienteToEdit.tipo_documento === 'DNI') setValue('tipo_documento', '1');
-    } else {
-      reset();
+    if (isOpen) {
+      if (clienteToEdit) {
+        reset(clienteToEdit);
+      } else {
+        reset({ tipo_documento: '6', numero_documento: '', razon_social: '', direccion: '', email: '', telefono: '' });
+      }
     }
-  }, [clienteToEdit, setValue, reset, isOpen]);
+  }, [isOpen, clienteToEdit, reset]);
 
   const handleConsultar = async () => {
-    if (isRUC && (!numeroDoc || numeroDoc.length !== 11)) {
-      toast.error("El RUC debe tener 11 dígitos");
-      return;
-    }
-    if (isDNI && (!numeroDoc || numeroDoc.length !== 8)) {
-      toast.error("El DNI debe tener 8 dígitos");
-      return;
+    const num = watch('numero_documento');
+    if (!num || (tipoDoc === '1' && num.length !== 8) || (tipoDoc === '6' && num.length !== 11)) {
+      return showToast('Ingrese un número válido para consultar', 'warning');
     }
 
-    setIsSearching(true);
-    const toastId = toast.loading("Consultando datos...");
-
+    setConsulting(true);
     try {
-      const data = await api.get(`/consultar-ruc/${numeroDoc}`);
-      
-      let nombreEncontrado = '';
-      if (data.razon_social) {
-        nombreEncontrado = data.razon_social;
-      } else if (data.nombres) {
-        nombreEncontrado = `${data.nombres} ${data.apellidoPaterno} ${data.apellidoMaterno}`.trim();
-      }
-
-      if (nombreEncontrado) {
-        setValue('razon_social', nombreEncontrado);
-        setValue('direccion', data.direccion || ''); 
-        if (data.estado && data.estado !== 'ACTIVO') {
-          toast(`Advertencia: El contribuyente está en estado ${data.estado}`, { icon: '⚠️' });
-        }
-        toast.success("Datos encontrados", { id: toastId });
-      } else {
-        throw new Error("Respuesta vacía");
-      }
-
+      const data = await consultarRucDni(num);
+      setValue('razon_social', data.razon_social || '');
+      setValue('direccion', data.direccion || '');
+      showToast('Datos encontrados', 'success');
     } catch (error) {
-      console.error(error);
-      toast.error("No se encontraron datos. Verifique el número.", { id: toastId });
+      showToast('No se encontraron datos en SUNAT/RENIEC', 'error');
     } finally {
-      setIsSearching(false);
+      setConsulting(false);
     }
   };
 
   const onSubmit = async (data) => {
+    setLoading(true);
     try {
-      let result;
       if (clienteToEdit) {
-        result = await clienteService.update(clienteToEdit.id, data);
-        toast.success('Cliente actualizado exitosamente');
+        await updateCliente(clienteToEdit.id, data);
+        showToast('Cliente actualizado correctamente', 'success');
       } else {
-        result = await clienteService.create(data);
-        toast.success('Cliente registrado exitosamente');
+        await createCliente(data);
+        showToast('Cliente creado correctamente', 'success');
       }
-      // Devolvemos el resultado (el cliente creado) al padre
-      if (onSuccess) onSuccess(result);
+      onSuccess();
       onClose();
     } catch (error) {
-      toast.error(error.message || 'Error al guardar cliente');
+      showToast(error.message || 'Error al guardar cliente', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white dark:bg-surface-800 rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="px-6 py-4 border-b border-surface-100 dark:border-surface-700 flex justify-between items-center bg-surface-50 dark:bg-surface-900/50">
-          <h3 className="text-lg font-bold text-surface-900 dark:text-white flex items-center gap-2">
-            {clienteToEdit ? <Building2 className="w-5 h-5 text-primary-500"/> : <User className="w-5 h-5 text-primary-500"/>}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-slide-up">
+        <div className="flex justify-between items-center p-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800">
             {clienteToEdit ? 'Editar Cliente' : 'Nuevo Cliente'}
           </h3>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 transition-colors">
-            <X className="w-6 h-6" />
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X size={20} />
           </button>
         </div>
 
-        <div className="overflow-y-auto p-6">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">Tipo Documento</label>
-                <select {...register('tipo_documento')} className="input-field">
-                  <option value="6">RUC</option>
-                  <option value="1">DNI</option>
-                  <option value="4">C.E.</option>
-                  <option value="7">Pasaporte</option>
-                </select>
-              </div>
-              <div className="md:col-span-2 space-y-1.5">
-                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">Número de Documento</label>
-                <div className="flex gap-2">
-                  <input
-                    className={`input-field flex-1 ${errors.numero_documento ? 'border-red-300 focus:border-red-500' : ''}`}
-                    placeholder={isRUC ? "20123456789" : isDNI ? "87654321" : "Documento"}
-                    {...register('numero_documento', { required: "Obligatorio", minLength: { value: isRUC ? 11 : 8, message: "Longitud inválida" } })}
-                  />
-                  {canSearch && (
-                    <Button type="button" onClick={handleConsultar} disabled={isSearching || !numeroDoc} variant="secondary" isLoading={isSearching}>
-                      <Search className="w-4 h-4 mr-1" /> Consultar
-                    </Button>
-                  )}
-                </div>
-                {errors.numero_documento && <p className="text-sm text-red-500">{errors.numero_documento.message}</p>}
-              </div>
+        <form onSubmit={handleSubmit(onSubmit)} className="p-4 space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-1">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tipo Doc</label>
+              <select
+                {...register('tipo_documento')}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-sm"
+              >
+                <option value="6">RUC</option>
+                <option value="1">DNI</option>
+              </select>
             </div>
-
-            <Input label="Razón Social / Nombre" placeholder="Nombre del Cliente" icon={isRUC ? Building2 : User} {...register('razon_social', { required: "Obligatorio" })} />
-            <Input label="Dirección Fiscal" placeholder="Dirección" icon={MapPin} {...register('direccion')} />
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Input label="Correo" type="email" icon={Mail} {...register('email')} />
-              <Input label="Teléfono" type="tel" icon={Phone} {...register('telefono')} />
+            <div className="col-span-2 relative">
+               <label className="block text-sm font-medium text-gray-700 mb-1">Número</label>
+               <div className="flex gap-2">
+                 <input
+                    {...register('numero_documento', { required: 'Requerido' })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-sm"
+                    placeholder={tipoDoc === '6' ? '20123456789' : '12345678'}
+                 />
+                 <button
+                   type="button"
+                   onClick={handleConsultar}
+                   disabled={consulting}
+                   className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
+                   title="Consultar SUNAT/RENIEC"
+                 >
+                   {consulting ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                 </button>
+               </div>
             </div>
+          </div>
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-surface-100 dark:border-surface-700">
-              <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
-              <Button type="submit" icon={Save}>{clienteToEdit ? 'Actualizar' : 'Guardar'}</Button>
-            </div>
-          </form>
-        </div>
+          <Input
+            label="Razón Social / Nombre"
+            error={errors.razon_social?.message}
+            {...register('razon_social', { required: 'Requerido' })}
+          />
+
+          <Input
+            label="Dirección"
+            {...register('direccion')}
+          />
+
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Email" type="email" {...register('email')} />
+            <Input label="Teléfono" {...register('telefono')} />
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={onClose} className="w-full">
+              Cancelar
+            </Button>
+            <Button type="submit" isLoading={loading} icon={Save} className="w-full">
+              Guardar
+            </Button>
+          </div>
+        </form>
       </div>
     </div>
   );

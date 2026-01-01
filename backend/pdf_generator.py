@@ -61,6 +61,7 @@ def obtener_etiqueta_tipo_doc(codigo):
 def create_pdf_buffer(document_data, user: models.User, document_type: str):
     buffer = io.BytesIO()
 
+    # Configuración de márgenes para que coincida con tu diseño original
     margen_izq = 20
     margen_der = 20
     ancho_total = letter[0] - margen_izq - margen_der
@@ -96,13 +97,12 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     body_bold_total_label_right = ParagraphStyle(name='BodyBoldTotalLabelRight', parent=body_bold, alignment=TA_RIGHT)
     body_bold_total_value_center = ParagraphStyle(name='BodyBoldTotalValueCenter', parent=body_bold, alignment=TA_CENTER)
 
-    hash_style = ParagraphStyle(name='HashStyle', parent=body, alignment=TA_CENTER, fontSize=8)
     legal_text_style = ParagraphStyle(name='LegalText', parent=body, alignment=TA_CENTER, fontSize=7)
 
     color_principal = colors.HexColor(user.primary_color or '#004aad')
     is_comprobante = (document_type == 'comprobante')
 
-    # --- Variables inicializadas ---
+    # --- Inicialización de Variables ---
     simbolo = "$"
     moneda_texto = ""
     doc_title_str = ""
@@ -113,110 +113,97 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     tipo_doc_cliente_str = ""
     nro_doc_cliente = ""
     direccion_cliente = ""
-    monto_total_d = Decimal('0.00')
-    total_gravado_d = Decimal('0.00')
-    total_igv_d = Decimal('0.00')
     ruc_para_cuadro = user.business_ruc or ''
-    productos_para_tabla_data = []
-    company_info_from_payload = {}
-    client_info_from_payload = {}
-    hash_comprobante = None
+    productos_fuente_dict = []
 
-    # --- LÓGICA UNIFICADA DE CÁLCULO (V3) ---
-    productos_fuente_dict = []  # List[dict]
-    payload = None  # para que exista incluso fuera del branch de comprobante
+    # --- Extracción de Datos (Unificada para Cotización y Comprobante) ---
+    # Usamos los datos del modelo Cotizacion/Comprobante directamente para mantener el diseño
+    
+    # 1. Items
+    items = getattr(document_data, "items", [])
+    for item in items:
+        # Soporte para objeto SQLAlchemy o diccionario
+        if isinstance(item, dict):
+            p_desc = item.get("descripcion", "")
+            p_cant = item.get("unidades", 0) or item.get("cantidad", 0)
+            p_unit = item.get("precio_unitario", 0)
+        else:
+            p_desc = getattr(item, "descripcion", "")
+            p_cant = getattr(item, "cantidad", 0)
+            p_unit = getattr(item, "precio_unitario", 0)
 
+        productos_fuente_dict.append({
+            "unidades": p_cant,
+            "precio_unitario": p_unit,
+            "descripcion": p_desc
+        })
+
+    # 2. Moneda
+    moneda_codigo = getattr(document_data, "moneda", "PEN")
+    if isinstance(document_data, dict): moneda_codigo = document_data.get("moneda", "PEN")
+    
+    simbolo = "S/" if moneda_codigo == "PEN" else "$"
+    moneda_texto = "SOLES" if moneda_codigo == "PEN" else "DÓLARES"
+
+    # 3. Títulos y Series
     if is_comprobante:
-        payload = document_data.payload_enviado
-        if not payload:
-            raise ValueError("El comprobante no tiene payload.")
-
-        productos_fuente_raw = payload.get('details', [])
-        for item in productos_fuente_raw:
-            productos_fuente_dict.append({
-                "unidades": item.get('cantidad', 0),
-                "precio_unitario": item.get('mtoPrecioUnitario', 0),  # PU CON IGV (V3)
-                "descripcion": item.get('descripcion', '')
-            })
-
-        client = payload.get('client', {})
-        company = payload.get('company', {})
-        simbolo = "S/" if payload.get('tipoMoneda') == "PEN" else "$"
-        moneda_texto = "SOLES" if payload.get('tipoMoneda') == "PEN" else "DÓLARES"
-        doc_title_str = 'FACTURA ELECTRÓNICA' if payload.get('tipoDoc') == '01' else 'BOLETA DE VENTA ELECTRÓNICA'
-        doc_number_str = f"N° {document_data.serie}-{document_data.correlativo}"
-        try:
-            fecha_dt = datetime.fromisoformat(payload.get('fechaEmision').replace('Z', '+00:00'))
-            fecha_emision = fecha_dt.strftime("%d/%m/%Y")
-        except Exception:
-            fecha_emision = "Inválida"
-
-        fecha_vencimiento = fecha_emision
-        nombre_cliente = client.get('rznSocial', '')
-        tipo_doc_cliente_str = obtener_etiqueta_tipo_doc(client.get('tipoDoc', ''))
-        nro_doc_cliente = str(client.get('numDoc', ''))
-        direccion_cliente = str(client.get('address', {}).get('direccion', '')).replace('\n', '<br/>')
-        ruc_para_cuadro = company.get('ruc') or (user.business_ruc or '')
-        company_info_from_payload = company
-        client_info_from_payload = client
-        hash_comprobante = getattr(document_data, "sunat_hash", None)
-
+        tipo_doc_sunat = getattr(document_data, "tipo_comprobante", "03")
+        if tipo_doc_sunat == "01":
+            doc_title_str = "FACTURA ELECTRÓNICA"
+        elif tipo_doc_sunat == "07":
+            doc_title_str = "NOTA DE CRÉDITO"
+        elif tipo_doc_sunat == "08":
+            doc_title_str = "NOTA DE DÉBITO"
+        else:
+            doc_title_str = "BOLETA DE VENTA ELECTRÓNICA"
     else:
-        # Es Cotización (tu estructura real)
-        items = getattr(document_data, "items", [])
-        for item in items:
-            productos_fuente_dict.append({
-                "unidades": getattr(item, "cantidad", 0),
-                "precio_unitario": getattr(item, "precio_unitario", 0),  # PU CON IGV (V3)
-                "descripcion": getattr(item, "descripcion", "")
-            })
-
-        simbolo = "S/" if getattr(document_data, "moneda", "PEN") == "PEN" else "$"
-        moneda_texto = "SOLES" if getattr(document_data, "moneda", "PEN") == "PEN" else "DÓLARES"
         doc_title_str = "COTIZACIÓN"
-        serie = getattr(document_data, "serie", "COT")
-        correlativo = getattr(document_data, "correlativo", 0)
-        doc_number_str = f"N° {document_data.serie}-{document_data.correlativo:08d}"
 
-        fecha_creacion = getattr(document_data, "fecha_creacion", None) or getattr(document_data, "fecha_emision", None) or getattr(document_data, "created_at", None)
-        if fecha_creacion:
-            try:
-                fecha_emision = fecha_creacion.strftime("%d/%m/%Y")
-                fecha_vencimiento = (fecha_creacion + relativedelta(months=1)).strftime("%d/%m/%Y")
-            except Exception:
-                fecha_emision = "Inválida"
-                fecha_vencimiento = "Inválida"
-        else:
-            fecha_emision = datetime.now().strftime("%d/%m/%Y")
-            fecha_vencimiento = (datetime.now() + relativedelta(months=1)).strftime("%d/%m/%Y")
+    serie = getattr(document_data, "serie", "COT")
+    correlativo = getattr(document_data, "correlativo", 0)
+    doc_number_str = f"N° {serie}-{str(correlativo).zfill(6)}"
 
-        cliente = getattr(document_data, "cliente", None)
-        if cliente:
-            nombre_cliente = getattr(cliente, "razon_social", "") or getattr(cliente, "nombre", "") or ""
-            tipo_doc_cliente_str = obtener_etiqueta_tipo_doc(getattr(cliente, "tipo_documento", "1"))
-            nro_doc_cliente = str(getattr(cliente, "numero_documento", "") or "")
-            # IMPORTANTE: Procesar saltos de línea en dirección
-            direccion_cliente = str(getattr(cliente, "direccion", "") or "").replace('\n', '<br/>')
-        else:
-            nombre_cliente = ""
-            tipo_doc_cliente_str = ""
-            nro_doc_cliente = ""
-            direccion_cliente = ""
+    # 4. Fechas
+    raw_fecha = getattr(document_data, "fecha_emision", None) or getattr(document_data, "created_at", datetime.now())
+    if isinstance(raw_fecha, str):
+        try: raw_fecha = datetime.fromisoformat(raw_fecha.replace('Z', '+00:00'))
+        except: raw_fecha = datetime.now()
+    
+    fecha_emision = raw_fecha.strftime("%d/%m/%Y")
+    
+    raw_venc = getattr(document_data, "fecha_vencimiento", None)
+    if raw_venc:
+        if isinstance(raw_venc, str):
+             try: raw_venc = datetime.fromisoformat(raw_venc)
+             except: raw_venc = raw_fecha + relativedelta(months=1)
+        fecha_vencimiento = raw_venc.strftime("%d/%m/%Y")
+    else:
+        fecha_vencimiento = (raw_fecha + relativedelta(months=1)).strftime("%d/%m/%Y")
 
-        ruc_para_cuadro = user.business_ruc or ''
+    # 5. Cliente
+    cliente = getattr(document_data, "cliente", None)
+    if cliente:
+        nombre_cliente = getattr(cliente, "razon_social", "")
+        tipo_doc_cliente_str = obtener_etiqueta_tipo_doc(getattr(cliente, "tipo_documento", "1"))
+        nro_doc_cliente = str(getattr(cliente, "numero_documento", ""))
+        direccion_cliente = str(getattr(cliente, "direccion", "") or "").replace('\n', '<br/>')
+    else:
+        nombre_cliente = "Cliente General"
+        tipo_doc_cliente_str = "DOC"
+        nro_doc_cliente = "00000000"
+        direccion_cliente = "-"
 
-    # --- Cálculo V3 centralizado ---
+    # --- Cálculo de Totales ---
     totals_v3 = calculate_cotizacion_totals_v3(productos_fuente_dict)
-
     total_gravado_d = totals_v3['total_gravado_v3']
     total_igv_d = totals_v3['total_igv_v3']
     monto_total_d = totals_v3['monto_total_v3']
     line_totals_v3_list = totals_v3['line_totals']
 
+    productos_para_tabla_data = []
     for i, item_dict in enumerate(productos_fuente_dict):
         line_totals = line_totals_v3_list[i]
         productos_para_tabla_data.append({
-            # IMPORTANTE: Procesar saltos de línea en descripción
             'descripcion': str(item_dict['descripcion']).replace('\n', '<br/>'),
             'cantidad': to_decimal(item_dict['unidades']),
             'p_unit_con_igv': line_totals['mto_precio_unitario_con_igv'],
@@ -224,7 +211,7 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
             'precio_total_item': line_totals['precio_total_linea']
         })
 
-    # --- Construcción del PDF (DISEÑO PROFESIONAL) ---
+    # --- Construcción del PDF (DISEÑO ORIGINAL) ---
     logo = ""
     if user.logo_filename and os.path.exists(f"logos/{user.logo_filename}"):
         try:
@@ -235,6 +222,8 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     business_name_p = Paragraph(user.business_name or "Nombre del Negocio", header_bold_style)
     business_address_p = Paragraph(str(user.business_address or "Dirección no especificada").replace('\n', '<br/>'), header_text_style)
     contact_info_p = Paragraph(f"{(user.email or '').strip()}<br/>{(user.business_phone or '').strip()}", header_text_style)
+    
+    # Textos para el cuadro RUC (renderizado luego con dibujar_rectangulo)
     ruc_p = Paragraph(f"RUC {ruc_para_cuadro}", header_text_style)
     titulo_p = Paragraph(doc_title_str.replace("ELECTRÓNICA", "<br/>ELECTRÓNICA"), header_bold_style)
     numero_p = Paragraph(doc_number_str, header_bold_style)
@@ -248,7 +237,7 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     tabla_principal.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('SPAN', (0, 0), (0, -1)),
+        ('SPAN', (0, 0), (0, -1)), # Span para el logo hacia abajo
         ('FONTSIZE', (0, 0), (-1, -1), 11),
         ('LEFTPADDING', (0, 0), (-1, -1), 0),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
@@ -256,20 +245,20 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         ('BOTTOMPADDING', (0, 0), (-1, -1), 0)
     ]))
 
+    # Datos Cliente
     nombre_cliente_p = Paragraph(nombre_cliente, body)
     direccion_cliente_p = Paragraph(direccion_cliente, body)
-    vencimiento_label_p = Paragraph(" Vencimiento:" if not is_comprobante else "", body)
-    vencimiento_value_p = Paragraph(fecha_vencimiento if not is_comprobante else "", body)
-    emision_label_p = Paragraph(" Emisión:", body)
-    emision_value_p = Paragraph(fecha_emision, body)
-    moneda_label_p = Paragraph(" Moneda:", body)
-    moneda_value_p = Paragraph(moneda_texto, body)
+    
+    # Condicionales de visualización
+    lbl_venc = " Vencimiento:" if not is_comprobante else ""
+    val_venc = fecha_vencimiento if not is_comprobante else ""
 
     data_cliente = [
-        ["Señores:", nombre_cliente_p, emision_label_p, emision_value_p],
-        [f"{tipo_doc_cliente_str}:", nro_doc_cliente, vencimiento_label_p, vencimiento_value_p],
-        ["Dirección:", direccion_cliente_p, moneda_label_p, moneda_value_p]
+        ["Señores:", nombre_cliente_p, " Emisión:", fecha_emision],
+        [f"{tipo_doc_cliente_str}:", nro_doc_cliente, lbl_venc, val_venc],
+        ["Dirección:", direccion_cliente_p, " Moneda:", moneda_texto]
     ]
+    
     tabla_cliente = Table(
         data_cliente,
         colWidths=[ancho_total * 0.1, ancho_total * 0.6, ancho_total * 0.15, ancho_total * 0.15]
@@ -370,21 +359,22 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     ]))
 
     # --- PIE DE PÁGINA: QR E INFORMACIÓN BANCARIA ---
-    qr_data = f"{ruc_para_cuadro}|{document_type}|{getattr(document_data, 'serie', '000')}|{getattr(document_data, 'correlativo', '0')}|{total_igv_d}|{monto_total_d}|{fecha_emision}|{getattr(document_data.cliente, 'tipo_documento', '6')}|{nro_doc_cliente}|"
-    qr_img = qrcode.make(qr_data)
+    # Generar QR
+    qr_content = f"{ruc_para_cuadro}|{doc_title_str}|{serie}|{correlativo}|{total_igv_d}|{monto_total_d}|{fecha_emision}|{tipo_doc_cliente_str}|{nro_doc_cliente}"
+    qr_img = qrcode.make(qr_content)
     qr_buffer = io.BytesIO()
     qr_img.save(qr_buffer, format='PNG')
     qr_buffer.seek(0)
     qr_image_obj = Image(qr_buffer, width=1.6 * inch, height=1.6 * inch)
 
-    # Tabla para centrar el QR al medio
+    # Tabla para centrar el QR
     t_qr_centered = Table([[qr_image_obj]], colWidths=[ancho_total])
     t_qr_centered.setStyle(TableStyle([
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
     ]))
 
-    # Párrafo de datos bancarios
+    # Datos bancarios
     bank_info_text = "<b>Datos para la Transferencia</b><br/>"
     if getattr(user, "business_name", None):
         bank_info_text += f"Beneficiario: {str(user.business_name).upper()}<br/><br/>"
@@ -393,12 +383,12 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         for account in user.bank_accounts:
             banco = account.get('banco', '')
             tipo_cuenta = account.get('tipo_cuenta', 'Cta Ahorro')
-            moneda = account.get('moneda', 'Soles')
+            moneda_acc = account.get('moneda', 'Soles')
             cuenta = account.get('cuenta', '')
             cci = account.get('cci', '')
             if banco:
                 bank_info_text += f"<b>{banco}</b><br/>"
-                label_cuenta = f"Cuenta Detracción en {moneda}" if 'nación' in banco.lower() else f"{tipo_cuenta} en {moneda}"
+                label_cuenta = f"Cuenta Detracción en {moneda_acc}" if 'nación' in banco.lower() else f"{tipo_cuenta} en {moneda_acc}"
                 if cuenta and cci:
                     bank_info_text += f"{label_cuenta}: {cuenta} CCI: {cci}<br/>"
                 elif cuenta:
@@ -407,13 +397,12 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
 
     bank_info_p = Paragraph(bank_info_text, body)
 
-    # --- Footer condicional (Notas) con procesamiento de saltos de línea ---
+    # --- Footer condicional (Notas) ---
     footer_notes = []
     if not is_comprobante:
         note_1_color = colors.HexColor(getattr(user, "pdf_note_1_color", None) or "#FF0000")
         style_red_bold = ParagraphStyle(name='RedBold', parent=body, textColor=note_1_color, fontName='Helvetica-Bold')
         
-        # IMPORTANTE: Convertir saltos de línea (\n) a etiquetas HTML (<br/>)
         note_1_text = str(getattr(user, "pdf_note_1", "") or "").replace('\n', '<br/>')
         note_2_text = str(getattr(user, "pdf_note_2", "") or "").replace('\n', '<br/>')
         
@@ -426,8 +415,7 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     if is_comprobante:
         legal_text = (
             f"Representación Impresa de la <b>{doc_title_str}</b>. "
-            "El usuario puede consultar su validez en SUNAT Virtual: www.sunat.gob.pe, "
-            "en Operaciones sin Clave SOL / Consulta de validez del CPE."
+            "El usuario puede consultar su validez en SUNAT Virtual: www.sunat.gob.pe"
         )
         legal_paragraph = Paragraph(legal_text, legal_text_style)
         tabla_legal = Table([[legal_paragraph]], colWidths=[ancho_total])
@@ -438,17 +426,23 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
         ]))
         final_legal = [Spacer(1, 10), tabla_legal]
 
+    # --- Función para dibujar el rectángulo del RUC (Diseño Original) ---
     def dibujar_rectangulo(canvas, doc_):
         canvas.saveState()
+        # Coordenadas ajustadas para el rectángulo superior derecho
         x = margen_izq + (ancho_total * 0.80)
-        y = doc_.height + doc_.topMargin - 82
+        y = doc_.height + doc_.topMargin - 82 # Ajuste vertical
         w = ancho_total * 0.20
         h = 80
+        
         canvas.setStrokeColor(color_principal)
         canvas.setLineWidth(1.5)
+        # Dibujamos el rectángulo redondeado como en el original
         canvas.roundRect(x, y, w, h, 5, stroke=1, fill=0)
         canvas.restoreState()
 
+    # --- Ensamblaje ---
+    # IMPORTANTE: Añadimos t_qr_centered al final de elements para que aparezca siempre
     elementos = [
         tabla_principal, Spacer(1, 20),
         tabla_cliente, Spacer(1, 20),
@@ -465,16 +459,8 @@ def create_pdf_buffer(document_data, user: models.User, document_type: str):
     buffer.seek(0)
     return buffer
 
-def create_cotizacion_pdf(cotizacion: models.Cotizacion, user: models.User):
-    """Genera el PDF para una cotización usando cálculos V3."""
-    print("DEBUG: Generando PDF para COTIZACIÓN...")
+def generar_pdf_cotizacion(cotizacion: models.Cotizacion, user: models.User):
     return create_pdf_buffer(cotizacion, user, 'cotizacion')
 
-# Compatibilidad con main.py
-def generar_pdf_cotizacion(cotizacion: models.Cotizacion, user: models.User):
-    return create_cotizacion_pdf(cotizacion, user)
-
 def create_comprobante_pdf(comprobante, user: models.User):
-    """Genera el PDF para un comprobante usando cálculos consistentes V3."""
-    print("DEBUG: Generando PDF para COMPROBANTE...")
     return create_pdf_buffer(comprobante, user, 'comprobante')

@@ -1,61 +1,115 @@
 import React from 'react';
-import { Toaster } from 'react-hot-toast'; // Asegúrate de instalar: npm install react-hot-toast
+import { ShieldCheck, Zap, Globe, Star, ArrowUpRight } from 'lucide-react';
 
-const AuthLayout = ({ children, title, subtitle }) => {
+const AuthLayout = ({ children, title, subtitle, overline, footerLink }) => {
   return (
-    <div className="min-h-screen w-full flex bg-surface-50 dark:bg-surface-950">
-      <Toaster position="top-right" />
+    <div className="fixed inset-0 w-full h-screen flex flex-col lg:grid lg:grid-cols-12 bg-white overflow-hidden">
       
-      {/* Columna Izquierda: Branding y Arte */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-primary-900">
-        {/* Círculos decorativos de fondo */}
-        <div className="absolute top-0 left-0 w-full h-full opacity-10">
-           <div className="absolute -top-24 -left-24 w-96 h-96 rounded-full bg-white blur-3xl"></div>
-           <div className="absolute bottom-0 right-0 w-[500px] h-[500px] rounded-full bg-primary-400 blur-3xl"></div>
+      {/* COLUMNA IZQUIERDA: Identidad Visual Profunda */}
+      <div className="hidden lg:flex lg:col-span-5 relative p-16 flex-col justify-between overflow-hidden bg-[#030405] border-r border-white/5">
+        
+        {/* Mesh Gradient Animado Sutil */}
+        <div className="absolute inset-0">
+          <div className="absolute top-[-10%] left-[-10%] w-[70%] h-[70%] rounded-full bg-indigo-600/20 blur-[120px]" />
+          <div className="absolute bottom-[10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-blue-600/10 blur-[100px]" />
+          <div className="absolute top-[40%] left-[20%] w-[30%] h-[30%] rounded-full bg-purple-600/10 blur-[80px]" />
+        </div>
+        
+        {/* Grid de Ingeniería */}
+        <div className="absolute inset-0 opacity-[0.03]" 
+             style={{ backgroundImage: `linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)`, backgroundSize: '40px 40px' }}>
         </div>
 
-        <div className="relative z-10 w-full flex flex-col justify-between p-12 text-white">
-          <div>
-            <div className="flex items-center gap-3">
-              {/* Logo SVG Simple */}
-              <svg className="w-10 h-10 text-primary-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5l-2.5 1.25L12 11zm0 2.5l-5-2.5-5 2.5L12 22l10-8.5-5-2.5-5 2.5z"/>
-              </svg>
-              <span className="text-2xl font-bold tracking-tight">FacturaPro</span>
-            </div>
+        {/* Logo Section */}
+        <div className="relative z-10 flex items-center gap-4">
+          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-2xl shadow-indigo-600/50 font-bold text-2xl transform -rotate-3">
+            F
           </div>
+          <div>
+            <span className="text-white text-xl font-bold tracking-tight block leading-none">FacturaPro</span>
+            <span className="text-indigo-400 text-[10px] font-bold uppercase tracking-[0.3em]">Enterprise</span>
+          </div>
+        </div>
 
-          <div className="max-w-md space-y-6">
-            <h1 className="text-4xl font-bold leading-tight">
-              Gestiona tus cotizaciones y facturas con precisión.
+        {/* Hero Content */}
+        <div className="relative z-10 space-y-12">
+          <div className="space-y-6">
+            <h1 className="text-5xl xl:text-7xl font-extrabold text-white leading-[1.05] tracking-tighter">
+              Control <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-blue-400 to-emerald-400">Total Fiscal.</span>
             </h1>
-            <p className="text-primary-200 text-lg">
-              La plataforma diseñada para cumplir con SUNAT sin complicaciones. Rapidez, seguridad y control total de tu negocio.
+            <p className="text-slate-400 text-xl max-w-sm leading-relaxed font-medium">
+              La infraestructura definitiva para la emisión de comprobantes electrónicos a escala global.
             </p>
           </div>
-
-          <div className="flex items-center gap-4 text-sm text-primary-300">
-            <span>© 2025 FacturaPro System</span>
-            <div className="w-1 h-1 bg-primary-500 rounded-full"></div>
-            <span>v2.0.0 Enterprise</span>
+          
+          <div className="grid grid-cols-1 gap-8">
+            {[
+              { icon: Zap, label: "0.4s Latency", desc: "Validación inmediata con servidores SUNAT/OSE." },
+              { icon: ShieldCheck, label: "Audit-Ready", desc: "Cumplimiento normativo automatizado 24/7." },
+            ].map((item, i) => (
+              <div key={i} className="flex items-center gap-5 group">
+                <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center group-hover:bg-indigo-600 group-hover:border-indigo-500 transition-all duration-500">
+                  <item.icon size={20} className="text-indigo-400 group-hover:text-white" />
+                </div>
+                <div>
+                  <h4 className="text-white text-sm font-bold flex items-center gap-2">
+                    {item.label} <ArrowUpRight size={14} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </h4>
+                  <p className="text-slate-500 text-xs mt-0.5">{item.desc}</p>
+                </div>
+              </div>
+            ))}
           </div>
+        </div>
+
+        {/* Status indicator */}
+        <div className="relative z-10 flex items-center gap-3">
+          <div className="flex h-2 w-2 relative">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </div>
+          <span className="text-slate-500 text-[10px] font-bold uppercase tracking-[0.2em]">Sistemas Operativos en Línea</span>
         </div>
       </div>
 
-      {/* Columna Derecha: Formulario */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-8">
-        <div className="w-full max-w-md space-y-8 animate-fade-in">
-          <div className="text-center lg:text-left">
-            <h2 className="text-3xl font-bold text-surface-900 dark:text-white tracking-tight">
+      {/* COLUMNA DERECHA: Área del Formulario */}
+      <div className="flex-1 lg:col-span-7 flex flex-col items-center justify-center bg-[#f8f9fb] relative p-6 md:p-12 overflow-y-auto">
+        
+        <div className="w-full max-w-[460px] flex flex-col">
+          
+          {/* ENCABEZADO REFINADO */}
+          <div className="mb-12 text-center lg:text-left">
+            <span className="inline-block py-1 px-3 rounded-full bg-indigo-50 text-indigo-600 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">
+              {overline}
+            </span>
+            <h2 className="text-5xl font-black text-slate-900 tracking-tighter mb-4">
               {title}
             </h2>
-            <p className="mt-2 text-surface-500 dark:text-surface-400">
-              {subtitle}
-            </p>
+            <div className="flex items-center gap-4">
+              <div className="h-[2px] w-12 bg-indigo-600 rounded-full" />
+              <p className="text-slate-500 text-sm font-medium">
+                {subtitle}
+              </p>
+            </div>
           </div>
 
-          {/* Aquí se inyecta el formulario (Login/Register) */}
-          {children}
+          {/* Tarjeta del Formulario */}
+          <div className="bg-white p-8 md:p-12 rounded-[2.5rem] shadow-[0_30px_70px_rgba(0,0,0,0.03)] border border-slate-100 w-full transform transition-all hover:shadow-[0_30px_70px_rgba(79,70,229,0.05)]">
+            {children}
+          </div>
+
+          {/* Enlace de navegación */}
+          <div className="mt-10 text-center">
+            {footerLink}
+          </div>
+        </div>
+
+        {/* Footer Legal */}
+        <div className="absolute bottom-8 left-0 right-0 text-center">
+           <span className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.3em]">
+             &copy; {new Date().getFullYear()} FacturaPro Global Cloud Infrastructure
+           </span>
         </div>
       </div>
     </div>
